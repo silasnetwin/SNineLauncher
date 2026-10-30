@@ -2,7 +2,6 @@ use crate::foundation::CoreServices;
 use futures_util::StreamExt;
 use reqwest::header::{
     ACCEPT, ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, ETAG, LAST_MODIFIED,
-    RANGE,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -17,7 +16,11 @@ use std::{
 use tauri::{AppHandle, Emitter, State};
 use tokio::{io::AsyncWriteExt, sync::Mutex as AsyncMutex};
 
-const SNINE_CLIENT_URL: &str = "https://s9lab.site/updates/snineclient.jar";
+const SNINE_CLIENT_RELEASES_API: &str =
+    "https://api.github.com/repos/silasnetwin/SNineLauncher/releases?per_page=100";
+const SNINE_CLIENT_METADATA_URL: &str =
+    "https://github.com/silasnetwin/SNineLauncher/releases/client-channel";
+const SNINE_CLIENT_RELEASE_PREFIX: &str = "client-v";
 const DOWNLOAD_EVENT: &str = "snine-client-download-progress";
 const UPDATER_REVISION: &str = "v21-fast-launch-v3";
 const MAX_CLIENT_JAR_BYTES: u64 = 256 * 1024 * 1024;
@@ -30,8 +33,8 @@ const FABRIC_API_MOD_ID: &str = "fabric-api";
 const GECKOLIB_MOD_ID: &str = "geckolib";
 const OWO_LIB_MOD_ID: &str = "owo";
 const COMPANION_MOD_MAX_BYTES: u64 = 64 * 1024 * 1024;
-const FAST_PROBE_CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
-const FAST_PROBE_TIMEOUT: Duration = Duration::from_millis(900);
+const FAST_PROBE_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+const FAST_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const REMOTE_PROBE_CACHE_TTL: Duration = Duration::from_secs(300);
 static REMOTE_PROBE_CACHE: OnceLock<StdMutex<Option<(Instant, RemoteMetadata)>>> = OnceLock::new();
 static REMOTE_PROBE_FAILURE_CACHE: OnceLock<StdMutex<Option<(Instant, String)>>> = OnceLock::new();
@@ -85,6 +88,33 @@ struct RemoteMetadata {
     last_modified: Option<String>,
     version: Option<String>,
     size_bytes: Option<u64>,
+    download_url: Option<String>,
+    sha256: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubClientRelease {
+    tag_name: String,
+    draft: bool,
+    prerelease: bool,
+    body: Option<String>,
+    assets: Vec<GitHubClientAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubClientAsset {
+    name: String,
+    browser_download_url: String,
+    size: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClientReleaseManifest {
+    version: String,
+    size: u64,
+    sha256: String,
+    #[serde(rename = "assetName")]
+    asset_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -274,49 +304,91 @@ fn remote_metadata(response: &reqwest::Response) -> RemoteMetadata {
         last_modified: header_string(headers, LAST_MODIFIED),
         version: custom_version(headers),
         size_bytes,
+        download_url: None,
+        sha256: None,
     }
 }
 
-fn update_urls() -> [&'static str; 1] {
-    // Production updates are HTTPS-only. A plaintext fallback both weakens the
-    // trust boundary and can add a full connection timeout before launch.
-    [SNINE_CLIENT_URL]
+fn valid_client_release_url(url: &str, tag: &str, asset_name: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    url.scheme() == "https"
+        && url.host_str() == Some("github.com")
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.path() == format!("/silasnetwin/SNineLauncher/releases/download/{tag}/{asset_name}")
 }
 
-async fn probe_remote_url(client: &reqwest::Client, url: &str) -> Result<RemoteMetadata, String> {
-    let mut errors = Vec::new();
-    match client
-        .head(url)
-        .header(CACHE_CONTROL, "no-cache")
-        .header(ACCEPT_ENCODING, "identity")
-        .send()
-        .await
-    {
-        Ok(head) if head.status().is_success() => return Ok(remote_metadata(&head)),
-        Ok(head) => errors.push(format!("head_http_{}", head.status().as_u16())),
-        Err(error) => errors.push(format!("head_failed:{error}")),
+fn resolve_client_release(releases: Vec<GitHubClientRelease>) -> Result<RemoteMetadata, String> {
+    for release in releases {
+        if release.draft
+            || !release.prerelease
+            || !release.tag_name.starts_with(SNINE_CLIENT_RELEASE_PREFIX)
+        {
+            continue;
+        }
+        let Some(body) = release.body else { continue };
+        let Ok(manifest) = serde_json::from_str::<ClientReleaseManifest>(body.trim()) else {
+            continue;
+        };
+        let expected_tag = format!("{SNINE_CLIENT_RELEASE_PREFIX}{}", manifest.version);
+        if release.tag_name != expected_tag
+            || manifest.version.is_empty()
+            || manifest.version.len() > 64
+            || !manifest
+                .version
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || ".+-_".contains(c))
+            || manifest.size == 0
+            || manifest.size > MAX_CLIENT_JAR_BYTES
+            || manifest.sha256.len() != 64
+            || !manifest.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || manifest.asset_name != format!("snineclient-{}.jar", manifest.version)
+        {
+            continue;
+        }
+        let Some(asset) = release
+            .assets
+            .iter()
+            .find(|asset| asset.name == manifest.asset_name && asset.size == manifest.size)
+        else {
+            continue;
+        };
+        if !valid_client_release_url(&asset.browser_download_url, &release.tag_name, &asset.name) {
+            continue;
+        }
+        return Ok(RemoteMetadata {
+            version: Some(manifest.version),
+            size_bytes: Some(manifest.size),
+            download_url: Some(asset.browser_download_url.clone()),
+            sha256: Some(manifest.sha256.to_ascii_lowercase()),
+            ..RemoteMetadata::default()
+        });
     }
+    Err("snine_update_no_valid_github_client_release".into())
+}
 
-    match client
-        .get(url)
-        .header(RANGE, "bytes=0-0")
+async fn probe_remote(client: &reqwest::Client) -> Result<RemoteMetadata, String> {
+    if let Some(metadata) = cached_remote_metadata() {
+        return Ok(metadata);
+    }
+    let releases = client
+        .get(SNINE_CLIENT_RELEASES_API)
+        .header(ACCEPT, "application/vnd.github+json")
         .header(CACHE_CONTROL, "no-cache")
-        .header(ACCEPT_ENCODING, "identity")
         .send()
         .await
-    {
-        Ok(response) if response.status().is_success() || response.status().as_u16() == 206 => {
-            Ok(remote_metadata(&response))
-        }
-        Ok(response) => {
-            errors.push(format!("get_http_{}", response.status().as_u16()));
-            Err(errors.join("|"))
-        }
-        Err(error) => {
-            errors.push(format!("get_failed:{error}"));
-            Err(errors.join("|"))
-        }
-    }
+        .map_err(|error| format!("snine_update_github_api_failed:{error}"))?
+        .error_for_status()
+        .map_err(|error| format!("snine_update_github_api_http:{error}"))?
+        .json::<Vec<GitHubClientRelease>>()
+        .await
+        .map_err(|error| format!("snine_update_github_api_json:{error}"))?;
+    let metadata = resolve_client_release(releases)?;
+    remember_remote_metadata(&metadata);
+    clear_remote_failure();
+    Ok(metadata)
 }
 
 fn cached_remote_metadata() -> Option<RemoteMetadata> {
@@ -364,7 +436,7 @@ async fn probe_remote_fast() -> Result<RemoteMetadata, String> {
     }
     let client = fast_probe_client()?;
     let started = Instant::now();
-    match probe_remote_url(&client, SNINE_CLIENT_URL).await {
+    match probe_remote(&client).await {
         Ok(metadata) => {
             eprintln!(
                 "[snine-launch-fast] HTTPS client version probe: {} ms",
@@ -382,50 +454,37 @@ async fn probe_remote_fast() -> Result<RemoteMetadata, String> {
     }
 }
 
-async fn probe_remote(client: &reqwest::Client) -> Result<RemoteMetadata, String> {
-    if let Some(metadata) = cached_remote_metadata() {
-        return Ok(metadata);
-    }
-    let mut errors = Vec::new();
-    for url in update_urls() {
-        match probe_remote_url(client, url).await {
-            Ok(metadata) => {
-                remember_remote_metadata(&metadata);
-                return Ok(metadata);
-            }
-            Err(error) => errors.push(format!("{url}:{error}")),
-        }
-    }
-    Err(format!(
-        "snine_update_remote_unreachable:{}",
-        errors.join("|")
-    ))
-}
-
-async fn open_download_response(client: &reqwest::Client) -> Result<reqwest::Response, String> {
+async fn open_download_response(
+    client: &reqwest::Client,
+    remote: &RemoteMetadata,
+) -> Result<reqwest::Response, String> {
     let mut last_error = String::from("snine_update_download_unreachable");
-    for url in update_urls() {
-        for attempt in 0..2u64 {
-            match client
-                .get(url)
-                .header(
-                    ACCEPT,
-                    "application/java-archive, application/octet-stream, */*",
-                )
-                .header(ACCEPT_ENCODING, "identity")
-                .header(CACHE_CONTROL, "no-cache")
-                .send()
-                .await
-            {
-                Ok(response) if response.status().is_success() => return Ok(response),
-                Ok(response) => {
-                    last_error =
-                        format!("snine_update_download_http_{}", response.status().as_u16())
-                }
-                Err(error) => last_error = format!("snine_update_download_failed:{error}"),
+    let url = remote
+        .download_url
+        .as_deref()
+        .ok_or_else(|| "snine_update_download_url_missing".to_string())?;
+    if !url.starts_with("https://github.com/silasnetwin/SNineLauncher/releases/download/client-v") {
+        return Err("snine_update_download_url_invalid".into());
+    }
+    for attempt in 0..2u64 {
+        match client
+            .get(url)
+            .header(
+                ACCEPT,
+                "application/java-archive, application/octet-stream, */*",
+            )
+            .header(ACCEPT_ENCODING, "identity")
+            .header(CACHE_CONTROL, "no-cache")
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => return Ok(response),
+            Ok(response) => {
+                last_error = format!("snine_update_download_http_{}", response.status().as_u16())
             }
-            tokio::time::sleep(Duration::from_millis(250 * (attempt + 1))).await;
+            Err(error) => last_error = format!("snine_update_download_failed:{error}"),
         }
+        tokio::time::sleep(Duration::from_millis(250 * (attempt + 1))).await;
     }
     Err(last_error)
 }
@@ -436,10 +495,11 @@ async fn download_with_windows_curl(
     profile_id: &str,
     temporary: &Path,
     total_bytes: Option<u64>,
+    download_url: &str,
 ) -> Result<(u64, String), String> {
     let mut last_error = String::from("snine_update_curl_failed");
 
-    for url in update_urls() {
+    {
         let _ = tokio::fs::remove_file(temporary).await;
         let mut child = tokio::process::Command::new("curl.exe")
             .arg("--location")
@@ -462,7 +522,7 @@ async fn download_with_windows_curl(
             .arg("240")
             .arg("--output")
             .arg(temporary)
-            .arg(url)
+            .arg(download_url)
             .spawn()
             .map_err(|error| format!("snine_update_curl_spawn_failed:{error}"))?;
 
@@ -507,13 +567,14 @@ async fn download_with_windows_powershell(
     profile_id: &str,
     temporary: &Path,
     total_bytes: Option<u64>,
+    download_url: &str,
 ) -> Result<(u64, String), String> {
     let mut last_error = String::from("snine_update_powershell_failed");
     let path = temporary.to_string_lossy().replace('\'', "''");
 
-    for url in update_urls() {
+    {
         let _ = tokio::fs::remove_file(temporary).await;
-        let url = url.replace('\'', "''");
+        let url = download_url.replace('\'', "''");
         let script = format!(
             concat!(
                 "$ErrorActionPreference='Stop'; ",
@@ -566,6 +627,7 @@ async fn download_with_windows_powershell(
     _profile_id: &str,
     _temporary: &Path,
     _total_bytes: Option<u64>,
+    _download_url: &str,
 ) -> Result<(u64, String), String> {
     Err("snine_update_powershell_unavailable".into())
 }
@@ -576,6 +638,7 @@ async fn download_with_windows_curl(
     _profile_id: &str,
     _temporary: &Path,
     _total_bytes: Option<u64>,
+    _download_url: &str,
 ) -> Result<(u64, String), String> {
     Err("snine_update_curl_unavailable".into())
 }
@@ -686,17 +749,14 @@ fn remove_duplicate_snine_jars(mods_dir: &Path, target: &Path) {
 }
 
 fn metadata_changed(remote: &RemoteMetadata, local: &PersistedClientMetadata) -> bool {
-    if local.url != SNINE_CLIENT_URL {
+    if local.url != SNINE_CLIENT_METADATA_URL {
         return true;
     }
-    // Content-Length alone is not a safe version identifier. If the host does not
-    // expose ETag, Last-Modified or an explicit version, redownload on launch so
-    // a changed jar can never be mistaken for the currently installed build.
-    if remote.version.is_none() && remote.etag.is_none() && remote.last_modified.is_none() {
-        // Never use Content-Length as an update gate. Some proxies/CDNs report
-        // range/chunk sizes here. Without a strong validator we prefer a fresh,
-        // verified JAR download over trusting remote size metadata.
-        return true;
+    // The GitHub manifest hash is the immutable update identity for the published JAR.\n    if remote.version.is_none() && remote.sha256.is_none() {\n        return true;\n    }
+    if let Some(value) = remote.sha256.as_deref() {
+        if local.sha256 != value {
+            return true;
+        }
     }
     if let Some(value) = remote.version.as_deref() {
         if local.remote_version.as_deref() != Some(value) {
@@ -1175,13 +1235,22 @@ async fn download_update_locked_impl(
     let _ = fs::remove_file(&temporary);
     let _ = fs::remove_file(&backup);
 
-    let mut remote = remote_hint.unwrap_or_default();
+    let mut remote =
+        remote_hint.ok_or_else(|| "snine_update_release_metadata_unavailable".to_string())?;
+    let download_url = remote
+        .download_url
+        .clone()
+        .ok_or_else(|| "snine_update_download_url_missing".to_string())?;
+    let expected_sha256 = remote
+        .sha256
+        .clone()
+        .ok_or_else(|| "snine_update_release_sha256_missing".to_string())?;
     remote.size_bytes = normalized_remote_size(remote.size_bytes);
 
     emit_progress(app, &profile_id, 0, remote.size_bytes, "downloading");
 
     let reqwest_result: Result<(u64, String), String> = async {
-        let response = open_download_response(&client).await?;
+        let response = open_download_response(&client, &remote).await?;
         let response_metadata = remote_metadata(&response);
         if response_metadata.etag.is_some() { remote.etag = response_metadata.etag.clone(); }
         if response_metadata.last_modified.is_some() { remote.last_modified = response_metadata.last_modified.clone(); }
@@ -1234,6 +1303,11 @@ async fn download_update_locked_impl(
     let mut accept_candidate = |source: &str, candidate: Result<(u64, String), String>| {
         match candidate {
             Ok((downloaded, sha256)) => {
+                if !sha256.eq_ignore_ascii_case(&expected_sha256) {
+                    failures.push(format!("{source}:snine_update_sha256_mismatch"));
+                    let _ = fs::remove_file(&temporary);
+                    return false;
+                }
                 if downloaded == 0 || downloaded > MAX_CLIENT_JAR_BYTES {
                     failures.push(format!(
                         "{source}:snine_update_download_size_invalid:{downloaded}"
@@ -1265,13 +1339,24 @@ async fn download_update_locked_impl(
 
     if !accept_candidate("reqwest", reqwest_result) {
         eprintln!("[snine-client-updater] reqwest candidate rejected; trying curl.exe");
-        let curl =
-            download_with_windows_curl(app, &profile_id, &temporary, remote.size_bytes).await;
+        let curl = download_with_windows_curl(
+            app,
+            &profile_id,
+            &temporary,
+            remote.size_bytes,
+            &download_url,
+        )
+        .await;
         if !accept_candidate("curl", curl) {
             eprintln!("[snine-client-updater] curl candidate rejected; trying Windows PowerShell WebClient");
-            let powershell =
-                download_with_windows_powershell(app, &profile_id, &temporary, remote.size_bytes)
-                    .await;
+            let powershell = download_with_windows_powershell(
+                app,
+                &profile_id,
+                &temporary,
+                remote.size_bytes,
+                &download_url,
+            )
+            .await;
             let _ = accept_candidate("powershell", powershell);
         }
     }
@@ -1311,7 +1396,7 @@ async fn download_update_locked_impl(
     remove_legacy_s9lab_client(&mods_dir)?;
 
     let metadata = PersistedClientMetadata {
-        url: SNINE_CLIENT_URL.into(),
+        url: SNINE_CLIENT_METADATA_URL.into(),
         etag: remote.etag,
         last_modified: remote.last_modified,
         remote_version: remote.version,
@@ -1365,7 +1450,7 @@ pub fn verify_client_ready(
     // validation, so unchanged size/metadata can be trusted without reopening the ZIP on
     // every Play click. Manual/untracked files still fall back to full JAR inspection.
     if let Some(metadata) = read_metadata(&metadata_path) {
-        if metadata.url == SNINE_CLIENT_URL && !metadata.sha256.is_empty() {
+        if metadata.url == SNINE_CLIENT_METADATA_URL && !metadata.sha256.is_empty() {
             if let (Some(expected_size), Ok(file_metadata)) =
                 (metadata.size_bytes, fs::metadata(&target))
             {
