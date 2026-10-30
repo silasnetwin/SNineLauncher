@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - "launcher-v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing launcher tag to build or refresh
+        required: true
+        default: launcher-v1.0.12
+        type: string
 
 permissions:
   contents: write
@@ -12,9 +19,9 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -30,10 +37,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: SNine Launcher ${{ github.ref_name }}
+          tagName: ${{ inputs.release_tag || github.ref_name }}
+          releaseName: SNine Launcher ${{ inputs.release_tag || github.ref_name }}
           releaseBody: Signed Windows installer and updater metadata.
           releaseDraft: true
           prerelease: false
-          uploadUpdaterJson: true
+          includeUpdaterJson: true
           updaterJsonPreferNsis: true
