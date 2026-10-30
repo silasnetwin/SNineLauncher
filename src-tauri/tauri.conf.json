@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SNine Launcher",
+  "version": "1.0.12",
+  "identifier": "de.snine.launcher.next",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1421",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "SNine Launcher",
+        "width": 1280,
+        "height": 720,
+        "minWidth": 960,
+        "minHeight": 620,
+        "center": true,
+        "decorations": false,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: data: https://cdn.modrinth.com https://cdn-raw.modrinth.com https://textures.minecraft.net https://*.giphy.com https://giphy.com https://*.tenor.com https://tenor.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost https://api.giphy.com https://giphy-analytics.giphy.com"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": [
+      "nsis",
+      "msi"
+    ],
+    "category": "Game",
+    "shortDescription": "SNine Launcher",
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA3MjIzRDMyNjUwNUUyQjAKUldTdzRnVmxNajBpQjh5bnFnTzR4dmFvK2Eyc1o2ZVZ1UCsyWng0b3kyYXR0RVN5NEw0TlVDSUIK",
+      "endpoints": [
+        "https://github.com/silasnetwin/SNineLauncher/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}
