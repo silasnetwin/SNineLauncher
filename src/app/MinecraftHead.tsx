@@ -14,11 +14,13 @@ export function MinecraftHead({ uuid, name, className, small = false }: {
   const normalizedUuid = uuid.replaceAll("-", "").toLowerCase();
   const [texture, setTexture] = useState<string | null>(textures.get(normalizedUuid) ?? null);
   const [imageFailed, setImageFailed] = useState(false);
+  const [quickHeadFailed, setQuickHeadFailed] = useState(false);
 
   useEffect(() => {
     let mounted = true;
     setTexture(textures.get(normalizedUuid) ?? null);
     setImageFailed(failedTextures.has(normalizedUuid));
+    setQuickHeadFailed(false);
     if (!/^[a-f\d]{32}$/.test(normalizedUuid) || textures.has(normalizedUuid) || failedTextures.has(normalizedUuid)) {
       setTexture(textures.get(normalizedUuid) ?? null);
       return () => { mounted = false; };
@@ -40,9 +42,10 @@ export function MinecraftHead({ uuid, name, className, small = false }: {
 
   const style = { "--avatar-hue": `${stableHue(name)}deg`, "--skin-texture": texture ? `url("${texture}")` : "none" } as CSSProperties;
   const hasSkin = !!texture && !imageFailed;
-  const classes = [className, small ? "account-avatar-small" : "", hasSkin ? "has-minecraft-skin" : "avatar-fallback"].filter(Boolean).join(" ");
+  const quickHead = /^[a-f\d]{32}$/.test(normalizedUuid) && !quickHeadFailed;
+  const classes = [className, small ? "account-avatar-small" : "", hasSkin ? "has-minecraft-skin" : quickHead ? "has-quick-minecraft-head" : "avatar-fallback"].filter(Boolean).join(" ");
   return <span className={classes} aria-label={`${name} Minecraft skin head`} style={style}>
-    {hasSkin ? <><img className="minecraft-head-source" src={texture} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => { failedTextures.add(normalizedUuid); setImageFailed(true); }} /><span className="minecraft-head-layer minecraft-head-face" /><span className="minecraft-head-layer minecraft-head-hat" /></> : initials(name)}
+    {hasSkin ? <><img className="minecraft-head-source" src={texture} alt="" loading="eager" fetchPriority="high" referrerPolicy="no-referrer" onError={() => { failedTextures.add(normalizedUuid); setImageFailed(true); }} /><span className="minecraft-head-layer minecraft-head-face" /><span className="minecraft-head-layer minecraft-head-hat" /></> : quickHead ? <img className="minecraft-head-quick" src={`https://mc-heads.net/avatar/${normalizedUuid}/64.png`} alt="" loading="eager" fetchPriority="high" referrerPolicy="no-referrer" onError={() => setQuickHeadFailed(true)} /> : initials(name)}
   </span>;
 }
 

@@ -1,18 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent } from "react";
 import { ArrowDown, ArrowLeft, Check, Clock3, Copy, ImagePlus, LoaderCircle, MessageSquare, Plus, Search, Send, Trash2, Users, X } from "lucide-react";
-import type { ActivityEntry, Friend, FriendMessage, FriendsSnapshot, Profile, SafeAccount } from "../lib/ipc";
+import type { Friend, FriendMessage, FriendsSnapshot, SafeAccount } from "../lib/ipc";
 import { ipc } from "../lib/ipc";
 import { MinecraftHead } from "./MinecraftHead";
 
-export type SocialTab = "Friends" | "Chats";
-
 type Props = {
-  tab: SocialTab;
-  onTabChange: (tab: SocialTab) => void;
   account: SafeAccount | null;
-  activity: ActivityEntry[];
-  profiles: Profile[];
-  onSelectProfile: (profile: Profile) => void;
   onSignIn: () => void;
 };
 
@@ -20,7 +13,7 @@ const emptySnapshot: FriendsSnapshot = { ok: false, friends: [], incomingRequest
 const GIPHY_API_KEY = import.meta.env.VITE_GIPHY_API_KEY?.trim() ?? "";
 type GiphyGif = { id: string; title: string; images?: { fixed_width?: { url?: string }; downsized?: { url?: string }; original?: { url?: string } }; analytics?: { onsent?: { url?: string } } };
 
-export function SocialPanel({ tab, onTabChange, account, activity, profiles, onSelectProfile, onSignIn }: Props) {
+export function SocialPanel({ account, onSignIn }: Props) {
   const [snapshot, setSnapshot] = useState<FriendsSnapshot>(emptySnapshot);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -31,6 +24,7 @@ export function SocialPanel({ tab, onTabChange, account, activity, profiles, onS
   const [query, setQuery] = useState("");
   const [addingFriend, setAddingFriend] = useState(false);
   const [friendName, setFriendName] = useState("");
+  const [friendRemovalTarget, setFriendRemovalTarget] = useState<Friend | null>(null);
   const [busy, setBusy] = useState(false);
   const [selectedFriendId, setSelectedFriendId] = useState<string | null>(null);
   const [messages, setMessages] = useState<FriendMessage[]>([]);
@@ -123,7 +117,7 @@ export function SocialPanel({ tab, onTabChange, account, activity, profiles, onS
   };
 
   useEffect(() => {
-    if (tab !== "Chats" || !selectedFriend || !("__TAURI_INTERNALS__" in window)) {
+    if (!selectedFriend || !("__TAURI_INTERNALS__" in window)) {
       setMessages([]);
       setMessagesLoading(false);
       setChatLoadError("");
@@ -148,7 +142,7 @@ export function SocialPanel({ tab, onTabChange, account, activity, profiles, onS
     void refresh();
     const timer = window.setInterval(() => void refresh(), 8000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [tab, selectedFriend?.uuid]);
+  }, [selectedFriend?.uuid]);
 
   useLayoutEffect(() => {
     const container = chatMessagesRef.current;
@@ -163,7 +157,7 @@ export function SocialPanel({ tab, onTabChange, account, activity, profiles, onS
 
   useEffect(() => {
     const container = chatMessagesRef.current;
-    if (!container || !selectedFriend || tab !== "Chats" || typeof ResizeObserver === "undefined") return;
+    if (!container || !selectedFriend || typeof ResizeObserver === "undefined") return;
     const keepAtLatest = () => {
       if (stickToLatestRef.current) container.scrollTop = container.scrollHeight;
     };
@@ -174,7 +168,7 @@ export function SocialPanel({ tab, onTabChange, account, activity, profiles, onS
     }
     window.addEventListener("resize", keepAtLatest);
     return () => { observer.disconnect(); window.removeEventListener("resize", keepAtLatest); };
-  }, [messages, selectedFriend?.uuid, tab]);
+  }, [messages, selectedFriend?.uuid]);
 
   useEffect(() => {
     if (!gifComposerOpen) { setGifResults([]); setGifLoading(false); setGifError(""); return; }
@@ -249,9 +243,24 @@ export function SocialPanel({ tab, onTabChange, account, activity, profiles, onS
   };
 
   const removeFriend = (friend: Friend) => {
-    if (!window.confirm(`Remove ${displayName(friend)} from your friends?`)) return;
-    void runFriendAction(() => ipc.removeFriend(friend.uuid), "Friend removed.");
-    if (selectedFriendId === friend.uuid) { selectedFriendIdRef.current = null; setSelectedFriendId(null); setMessages([]); }
+    setFriendRemovalTarget(friend);
+  };
+
+  const confirmRemoveFriend = async () => {
+    if (!friendRemovalTarget || busy) return;
+    const friend = friendRemovalTarget;
+    setBusy(true);
+    setError("");
+    try {
+      setSnapshot(await ipc.removeFriend(friend.uuid));
+      setFriendNotice(`${displayName(friend)} was removed from your friends.`);
+      setFriendRemovalTarget(null);
+      if (selectedFriendId === friend.uuid) { selectedFriendIdRef.current = null; setSelectedFriendId(null); setMessages([]); }
+    } catch (reason) {
+      setError(message(reason));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const openChat = (friend: Friend) => {
@@ -263,7 +272,6 @@ export function SocialPanel({ tab, onTabChange, account, activity, profiles, onS
     setError("");
     setChatLoadError("");
     setChatActionError("");
-    onTabChange("Chats");
   };
 
   const closeChat = () => {
@@ -367,23 +375,18 @@ export function SocialPanel({ tab, onTabChange, account, activity, profiles, onS
   };
 
   return <>
-    <div className="side-tabs social-tabs" role="tablist" aria-label="Social">
-      <button role="tab" aria-selected={tab === "Friends"} className={tab === "Friends" ? "active" : ""} onClick={() => onTabChange("Friends")}><Users size={16} /> Friends</button>
-      <button role="tab" aria-selected={tab === "Chats"} className={tab === "Chats" ? "active" : ""} onClick={() => onTabChange("Chats")}><MessageSquare size={15} /> Chats{snapshot.friends.some(friend => friend.unreadMessages > 0) && <i className="social-unread-dot" />}</button>
-    </div>
     {!account ? <div className="side-content social-content"><div className="social-empty"><div className="activity-symbol"><Users size={17} /></div><strong>Sign in to SNine</strong><p>Your friends and chats are connected to your Minecraft account.</p><button className="secondary-action" onClick={onSignIn}>Sign in</button></div></div>
-      : tab === "Friends" ? <div className="side-content social-content">
+      : !selectedFriend ? <div className="side-content social-content">
         <div className="social-account-row"><Avatar name={account.username} uuid={account.uuid} /><span><strong>{account.username}</strong><small><i className={`presence-dot ${snapshot.ok && !error ? "online" : ""}`} /> {loading ? "Connecting…" : snapshot.ok && !error ? "Online · SNine Launcher" : error ? "Disconnected" : "Offline"}</small></span><button className="social-refresh" title="Refresh friends" aria-label="Refresh friends" onClick={() => { setLoading(true); void refreshFriends(true); }}><Clock3 size={14} /></button></div>
         <div className="social-group-row"><strong>Friends</strong><span>{snapshot.friends.length}</span><button className="social-icon-button" title="Add friend" aria-label="Add friend" onClick={() => setAddingFriend(value => !value)}><Plus size={16} /></button><button className="social-icon-button" title="Search friends" aria-label="Search friends" onClick={() => document.getElementById("social-friend-search")?.focus()}><Search size={15} /></button></div>
         {addingFriend && <form className="friend-add-form" onSubmit={sendRequest}><input autoFocus aria-label="Friend username" placeholder="Minecraft or SNine name" maxLength={32} value={friendName} onChange={event => setFriendName(event.target.value)} /><button aria-label="Send friend request" disabled={busy || !friendName.trim()}><Plus size={15} /></button><button type="button" aria-label="Cancel friend request" onClick={() => { setAddingFriend(false); setFriendName(""); }}><X size={15} /></button></form>}
         <label className="social-search"><Search size={14} /><input id="social-friend-search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search friends" aria-label="Search friends" />{query && <button type="button" aria-label="Clear friend search" onClick={() => setQuery("")}><X size={13} /></button>}</label>
         {snapshot.incomingRequests.length > 0 && <section className="friend-requests"><h3>Friend requests <span>{snapshot.incomingRequests.length}</span></h3>{snapshot.incomingRequests.map(request => <article className="friend-request-row" key={request.uuid}><Avatar name={request.name} uuid={request.uuid} /><span><strong>{request.name}</strong><small>Wants to be your friend</small></span><button title="Accept request" aria-label={`Accept ${request.name}`} disabled={busy} onClick={() => answerRequest(request.uuid, true)}><Check size={14} /></button><button title="Decline request" aria-label={`Decline ${request.name}`} disabled={busy} onClick={() => answerRequest(request.uuid, false)}><X size={14} /></button></article>)}</section>}
-        {snapshot.outgoingRequests.length > 0 && <section className="outgoing-requests"><h3>Sent requests</h3>{snapshot.outgoingRequests.map(request => <div key={request.uuid}><span>{request.name}</span><small>Pending</small></div>)}</section>}
+        {snapshot.outgoingRequests.length > 0 && <section className="outgoing-requests"><h3>Sent requests</h3>{snapshot.outgoingRequests.map(request => <div key={request.uuid}><Avatar name={request.name} uuid={request.uuid} /><span>{request.name}</span><small>Pending</small><button type="button" title={`Cancel request to ${request.name}`} aria-label={`Cancel request to ${request.name}`} disabled={busy} onClick={() => void runFriendAction(() => ipc.cancelFriendRequest(request.uuid), "Friend request cancelled.")}><X size={13} /></button></div>)}</section>}
         {friendNotice && <p className="social-status-message success" role="status">{friendNotice}</p>}{error && snapshot.ok && <p className="social-status-message error" role="alert">{error}</p>}
         {loading && snapshot.friends.length === 0 ? <div className="social-loading">Loading friends…</div> : error && !snapshot.ok ? <div className="social-empty compact"><Users size={18} /><strong>Can’t connect to SNine</strong><p>{error}</p><button className="secondary-action" onClick={() => { setLoading(true); void refreshFriends(true); }}>Retry</button></div> : filteredFriends.length === 0 ? <div className="social-empty compact"><Users size={18} /><strong>{snapshot.friends.length ? "No friends match" : "No friends yet"}</strong><p>{snapshot.friends.length ? "Try another search." : "Add a friend by their Minecraft username."}</p></div> : <div className="friend-list">{filteredFriends.map(friend => <FriendRow key={friend.uuid} friend={friend} onChat={() => openChat(friend)} onRemove={() => removeFriend(friend)} />)}</div>}
-        <section className="social-activity"><h3>Recent activity</h3>{activity.length === 0 ? <small>No recent activity</small> : activity.slice(0, 3).map(entry => { const profile = profiles.find(item => item.id === entry.profileId); return <button key={entry.id} disabled={!profile} onClick={() => profile && onSelectProfile(profile)}><i /><span><strong>{entry.title}</strong><small>{entry.detail} · {formatAge(entry.occurredAt)}</small></span></button>; })}</section>
       </div> : <div className="side-content social-content">
-        {selectedFriend ? <><div className="chat-header"><button className="social-icon-button" aria-label="Back to conversations" onClick={closeChat}><ArrowLeft size={16} /></button><Avatar name={displayName(selectedFriend)} uuid={selectedFriend.uuid} /><span><strong>{displayName(selectedFriend)}</strong><small>{selectedFriend.online ? selectedFriend.status || "Online" : `Last seen ${formatAge(selectedFriend.lastSeen)}`}</small></span></div>
+        {selectedFriend ? <><div className="chat-header"><button className="social-icon-button" aria-label="Back to friends" title="Back to friends" onClick={closeChat}><ArrowLeft size={16} /></button><Avatar name={displayName(selectedFriend)} uuid={selectedFriend.uuid} /><span><strong>{displayName(selectedFriend)}</strong><small>{selectedFriend.online ? selectedFriend.status || "Online" : `Last seen ${formatAge(selectedFriend.lastSeen)}`}</small></span></div>
           <div className="chat-messages" ref={chatMessagesRef} onScroll={onChatScroll} aria-live="polite">{messagesLoading && messages.length === 0 ? <div className="social-loading">Loading conversation…</div> : messages.length === 0 ? <div className="social-empty compact"><MessageSquare size={18} /><strong>Start a conversation</strong><p>Messages are private between confirmed friends.</p></div> : messages.map((item, index) => { const grouped = index > 0 && shouldGroupMessages(messages[index - 1], item); return <article key={item.messageId} className={`chat-message ${item.senderUuid === account.uuid ? "mine" : "theirs"}${grouped ? " grouped" : ""}`}>{!grouped && <small>{item.senderUuid === account.uuid ? "You" : item.senderName} · {formatTime(item.sentAt)}</small>}{renderChatMessage(item.message)}<button type="button" className="chat-copy-button" title="Copy message" aria-label="Copy message" onClick={() => void copyMessage(item.message)}><Copy size={12} /></button></article>; })}{showLatestMessageButton && <button className="chat-latest-button" onClick={jumpToLatest}><ArrowDown size={13} /> Latest</button>}</div>
           {(chatActionError || chatLoadError) && <p className="social-status-message error" role="alert">{chatActionError || chatLoadError}</p>}{chatCopyNotice && <p className="social-status-message success" role="status">{chatCopyNotice}</p>}
           {gifComposerOpen && <section className="gif-picker" aria-label="GIF search">
@@ -396,8 +399,9 @@ export function SocialPanel({ tab, onTabChange, account, activity, profiles, onS
             <form className="gif-compose" onSubmit={sendGif}><input aria-label="Direct GIF URL" placeholder="Or paste a direct GIPHY / Tenor .gif link" maxLength={512} value={gifUrl} onChange={event => setGifUrl(event.target.value)} /><button aria-label="Send GIF URL" disabled={busy || !gifUrl.trim()}><Send size={14} /></button></form>
           </section>}
           <form className="chat-compose" onSubmit={sendMessage}><button type="button" className="chat-gif-trigger" aria-label="Send a GIF" title="Search and send GIFs" aria-pressed={gifComposerOpen} onClick={() => { setGifComposerOpen(value => !value); setChatActionError(""); }}><ImagePlus size={16} /></button><input autoFocus aria-label={`Message ${displayName(selectedFriend)}`} title="Press Enter to send. Paste a direct GIF URL to preview it." placeholder={`Message ${displayName(selectedFriend)}`} maxLength={240} value={draft} onChange={event => setDraft(event.target.value)} onPaste={handleMessagePaste} /><button aria-label="Send message" disabled={busy || !draft.trim()}>{sendingFriendUuid === selectedFriend.uuid ? <LoaderCircle size={16} className="gif-spinner" /> : <Send size={16} />}</button></form>
-        </> : <><div className="side-heading"><strong>Chats</strong><span className="item-count">{snapshot.friends.filter(friend => friend.unreadMessages > 0).length}</span></div>{error && <p className="social-status-message error" role="alert">{error}</p>}{snapshot.friends.length === 0 ? <div className="social-empty"><MessageSquare size={18} /><strong>No conversations</strong><p>Add friends to start a private chat.</p><button className="secondary-action" onClick={() => onTabChange("Friends")}>Find friends</button></div> : <div className="chat-list">{snapshot.friends.slice().sort((a, b) => b.unreadMessages - a.unreadMessages || Number(b.online) - Number(a.online) || displayName(a).localeCompare(displayName(b))).map(friend => <button key={friend.uuid} className="chat-list-row" onClick={() => openChat(friend)}><Avatar name={displayName(friend)} uuid={friend.uuid} /><span><strong>{displayName(friend)}</strong><small>{friend.online ? friend.status || "Online" : "Offline"}</small></span>{friend.unreadMessages > 0 && <i className="unread-count">{friend.unreadMessages > 9 ? "9+" : friend.unreadMessages}</i>}</button>)}</div>}</>}
+        </> : null}
       </div>}
+    {friendRemovalTarget && <div className="modal-scrim friend-remove-scrim" onClick={() => !busy && setFriendRemovalTarget(null)}><section className="friend-remove-dialog" role="alertdialog" aria-modal="true" aria-labelledby="friend-remove-heading" onClick={event => event.stopPropagation()}><button className="friend-remove-dialog-close" aria-label="Cancel" disabled={busy} onClick={() => setFriendRemovalTarget(null)}><X size={16} /></button><Avatar name={displayName(friendRemovalTarget)} uuid={friendRemovalTarget.uuid} /><small>REMOVE FRIEND</small><h2 id="friend-remove-heading">Remove {displayName(friendRemovalTarget)}?</h2><p>They will disappear from your friends list. You can send them a new friend request later.</p>{error && <p className="friend-remove-error" role="alert">{error}</p>}<div><button className="secondary-action" disabled={busy} onClick={() => setFriendRemovalTarget(null)}>Keep friend</button><button className="friend-remove-confirm" disabled={busy} onClick={() => void confirmRemoveFriend()}>{busy ? <LoaderCircle size={14} className="gif-spinner" /> : <Trash2 size={14} />}{busy ? "Removing…" : "Remove friend"}</button></div></section></div>}
   </>;
 }
 

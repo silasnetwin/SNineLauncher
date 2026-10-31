@@ -1,11 +1,9 @@
 import { useEffect, useState } from "react";
 import { Search, X } from "lucide-react";
-import { ipc, type BlockIconEntry, type LoaderType, type MinecraftVersionInfo, type Profile } from "../lib/ipc";
+import { ipc, type BlockIconEntry, type LoaderType, type MinecraftVersionInfo } from "../lib/ipc";
 import snineLauncherIcon from "../assets/brand/snine-launcher-icon.png";
 
-export function insertCreatedProfile(current: Profile[], created: Profile): Profile[] {
-  return [...current.map(profile => ({ ...profile, selected: false })), { ...created, selected: true }];
-}
+export { insertCreatedProfile } from "../lib/profile-utils";
 
 export type ProfileCreationFormProps = {
   name: string; onNameChange: (value: string) => void;

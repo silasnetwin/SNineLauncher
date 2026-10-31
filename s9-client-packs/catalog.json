@@ -1,0 +1,35 @@
+{
+  "format": "snine-pack-catalog",
+  "version": 1,
+  "packs": [
+    {
+      "id": "s9-performance",
+      "name": "S9 Performance",
+      "description": "A focused Fabric performance setup for smoother frame rates and lower memory use.",
+      "loader": "fabric",
+      "minecraftVersions": ["1.21.11", "26.1.2", "26.2", "26.3"],
+      "mods": [
+        { "projectId": "AANobbMI", "slug": "sodium" },
+        { "projectId": "gvQqBUqZ", "slug": "lithium" },
+        { "projectId": "uXXizFIs", "slug": "ferrite-core" },
+        { "projectId": "5ZwdcRci", "slug": "immediatelyfast" },
+        { "projectId": "NNAgCjsB", "slug": "entityculling" },
+        { "projectId": "LQ3K71Q1", "slug": "dynamic-fps" }
+      ]
+    },
+    {
+      "id": "s9-essentials",
+      "name": "S9 Essentials",
+      "description": "Small quality-of-life additions for food info, zoom, inventory and client setup.",
+      "loader": "fabric",
+      "minecraftVersions": ["1.21.11", "26.1.2", "26.2", "26.3"],
+      "mods": [
+        { "projectId": "EsAfCjCV", "slug": "appleskin" },
+        { "projectId": "mOgUt4GM", "slug": "modmenu" },
+        { "projectId": "w7ThoJFB", "slug": "zoomify" },
+        { "projectId": "2M01OLQq", "slug": "shulkerboxtooltip" },
+        { "projectId": "zV5r3pPn", "slug": "3dskinlayers" }
+      ]
+    }
+  ]
+}

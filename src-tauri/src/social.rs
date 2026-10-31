@@ -73,6 +73,51 @@ pub struct FriendsSnapshot {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ClientCosmetic {
+    pub id: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub rarity: String,
+    #[serde(default)]
+    pub preview_asset: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientCosmeticsSnapshot {
+    pub owned_cosmetics: Vec<String>,
+    pub equipped_cosmetics: std::collections::HashMap<String, String>,
+    pub cosmetics: Vec<ClientCosmetic>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProfileList {
+    profiles: Vec<OwnedCosmeticProfile>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OwnedCosmeticProfile {
+    uuid: String,
+    #[serde(default)]
+    owned_cosmetics: Vec<String>,
+    #[serde(default)]
+    equipped_cosmetics: std::collections::HashMap<String, String>,
+}
+
+#[derive(Deserialize)]
+struct CosmeticCatalog {
+    catalog: Vec<ClientCosmetic>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FriendMessage {
     pub message_id: i64,
     pub sender_uuid: String,
@@ -250,6 +295,28 @@ impl SocialService {
         self.parse_authenticated(response, &session).await
     }
 
+    pub async fn client_cosmetics(&self, auth: &AuthService) -> Result<ClientCosmeticsSnapshot, String> {
+        let session = self.backend_session(auth).await?;
+        let response = self.client
+            .get(format!("{API_BASE}/profiles"))
+            .header(SESSION_HEADER, &session.token)
+            .send().await
+            .map_err(|_| "Could not load SNineClient cosmetics.".to_string())?;
+        let profiles: ProfileList = self.parse_authenticated(response, &session).await?;
+        let account_uuid = canonical_uuid(&session.uuid)?;
+        let profile = profiles.profiles.into_iter()
+            .find(|profile| canonical_uuid(&profile.uuid).ok().as_deref() == Some(account_uuid.as_str()))
+            .ok_or_else(|| "Your SNineClient cosmetic profile is unavailable.".to_string())?;
+        let response = self.client.get(format!("{API_BASE}/cosmetics")).send().await
+            .map_err(|_| "Could not load the SNineClient cosmetic catalog.".to_string())?;
+        let catalog: CosmeticCatalog = parse_response(response).await?;
+        Ok(ClientCosmeticsSnapshot {
+            owned_cosmetics: profile.owned_cosmetics,
+            equipped_cosmetics: profile.equipped_cosmetics,
+            cosmetics: catalog.catalog,
+        })
+    }
+
     pub async fn messages(
         &self,
         auth: &AuthService,
@@ -330,6 +397,23 @@ impl SocialService {
         self.parse_authenticated(response, &session).await
     }
 
+    pub async fn cancel_friend_request(
+        &self,
+        auth: &AuthService,
+        friend_uuid: &str,
+    ) -> Result<FriendsSnapshot, String> {
+        let session = self.backend_session(auth).await?;
+        let response = self
+            .client
+            .post(format!("{API_BASE}/friends/cancel"))
+            .header(SESSION_HEADER, &session.token)
+            .json(&serde_json::json!({ "friendUuid": valid_uuid(friend_uuid)? }))
+            .send()
+            .await
+            .map_err(|_| "Could not cancel the friend request. Check your connection.".to_string())?;
+        self.parse_authenticated(response, &session).await
+    }
+
     pub async fn remove_friend(
         &self,
         auth: &AuthService,
@@ -381,6 +465,9 @@ async fn response_error(response: reqwest::Response) -> String {
             Some(code) if code == "already_friends" => "You are already friends.".into(),
             Some(code) if code == "friend_request_exists" || code == "friend_request_pending" => {
                 "A friend request is already pending.".into()
+            }
+            Some(code) if code == "friend_request_not_found" => {
+                "That pending friend request is no longer available.".into()
             }
             Some(code) if code == "not_friends" || code == "friends_only" => {
                 "You can only message confirmed friends.".into()

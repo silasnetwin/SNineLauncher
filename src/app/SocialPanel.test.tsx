@@ -1,14 +1,13 @@
 /** @vitest-environment jsdom */
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ipc, type Friend, type FriendsSnapshot, type SafeAccount } from "../lib/ipc";
 import { SocialPanel } from "./SocialPanel";
 
 vi.mock("../lib/ipc", () => ({ ipc: {
   getFriends: vi.fn(), getFriendMessages: vi.fn(), sendFriendMessage: vi.fn(),
-  addFriend: vi.fn(), respondToFriendRequest: vi.fn(), removeFriend: vi.fn(),
+  addFriend: vi.fn(), respondToFriendRequest: vi.fn(), cancelFriendRequest: vi.fn(), removeFriend: vi.fn(),
 } }));
 
 afterEach(() => { cleanup(); delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__; });
@@ -17,12 +16,8 @@ const account: SafeAccount = { uuid: "00000000-0000-0000-0000-000000000001", use
 const friend: Friend = { uuid: "00000000-0000-0000-0000-000000000002", name: "Alex", customNickname: "", note: "", online: true, lastSeen: 0, status: "Online", favorite: false, unreadMessages: 1 };
 const snapshot: FriendsSnapshot = { ok: true, friends: [friend], incomingRequests: [], outgoingRequests: [] };
 
-function renderPanel(tab: "Friends" | "Chats" = "Friends") {
-  function Harness() {
-    const [currentTab, setCurrentTab] = useState(tab);
-    return <SocialPanel tab={currentTab} onTabChange={setCurrentTab} account={account} activity={[]} profiles={[]} onSelectProfile={vi.fn()} onSignIn={vi.fn()} />;
-  }
-  return render(<Harness />);
+function renderPanel() {
+  return render(<SocialPanel account={account} onSignIn={vi.fn()} />);
 }
 
 describe("friends and chat side panel", () => {
@@ -33,6 +28,7 @@ describe("friends and chat side panel", () => {
     vi.mocked(ipc.getFriendMessages).mockResolvedValue([]);
     vi.mocked(ipc.addFriend).mockResolvedValue(snapshot);
     vi.mocked(ipc.respondToFriendRequest).mockResolvedValue(snapshot);
+    vi.mocked(ipc.cancelFriendRequest).mockResolvedValue(snapshot);
     vi.mocked(ipc.removeFriend).mockResolvedValue(snapshot);
   });
 

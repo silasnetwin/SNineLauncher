@@ -1,14 +1,39 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Clipboard, Download, PackageOpen, Plus, Search, Settings2, Sparkles, Trash2, Upload, X } from "lucide-react";
 import { ipc, type LoaderType, type ManagedMod, type ModrinthProject, type ModUpdateStatus } from "../lib/ipc";
+import bundledPackCatalog from "../../s9-client-packs/catalog.json";
 
 const searchCache = new Map<string, { savedAt: number; results: ModrinthProject[] }>();
 const projectIconCache = new Map<string, string>();
 const CACHE_TTL = 5 * 60_000;
 const browseCategories = ["all", "optimization", "utility", "library", "technology", "worldgen"] as const;
+const PACK_CATALOG_URL = "https://raw.githubusercontent.com/silasnetwin/SNineLauncher/main/s9-client-packs/catalog.json";
+type S9ModPack = { id: string; name: string; description: string; loader: LoaderType; minecraftVersions: string[]; mods: Array<{ projectId: string; slug: string }> };
+type PackCatalogSource = "GitHub" | "Built in";
+
+function parsePackCatalog(value: unknown): S9ModPack[] | null {
+  if (!value || typeof value !== "object") return null;
+  const catalog = value as { format?: unknown; version?: unknown; packs?: unknown };
+  if (catalog.format !== "snine-pack-catalog" || catalog.version !== 1 || !Array.isArray(catalog.packs) || catalog.packs.length > 24) return null;
+  const packs: S9ModPack[] = [];
+  for (const candidate of catalog.packs) {
+    if (!candidate || typeof candidate !== "object") return null;
+    const pack = candidate as Record<string, unknown>;
+    if (typeof pack.id !== "string" || !/^[a-z0-9][a-z0-9-]{0,47}$/.test(pack.id) || typeof pack.name !== "string" || pack.name.length > 64 || typeof pack.description !== "string" || pack.description.length > 240 || !["fabric", "quilt", "forge", "neoforge", "vanilla"].includes(String(pack.loader)) || !Array.isArray(pack.minecraftVersions) || !pack.minecraftVersions.every(version => typeof version === "string" && /^[a-zA-Z0-9.+-]{1,32}$/.test(version)) || !Array.isArray(pack.mods) || pack.mods.length > 64) return null;
+    const mods: S9ModPack["mods"] = [];
+    for (const entry of pack.mods) {
+      if (!entry || typeof entry !== "object") return null;
+      const mod = entry as Record<string, unknown>;
+      if (typeof mod.projectId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(mod.projectId) || typeof mod.slug !== "string" || !/^[a-zA-Z0-9_-]{1,96}$/.test(mod.slug)) return null;
+      mods.push({ projectId: mod.projectId, slug: mod.slug });
+    }
+    packs.push({ id: pack.id, name: pack.name, description: pack.description, loader: pack.loader as LoaderType, minecraftVersions: pack.minecraftVersions as string[], mods });
+  }
+  return packs;
+}
 
 export function ProfileModsPage({ profileId, minecraftVersion, loaderType = "fabric", installed }: { profileId: string; minecraftVersion: string; loaderType?: LoaderType; installed: boolean }) {
-  const [view, setView] = useState<"Installed" | "Browse">("Installed");
+  const [view, setView] = useState<"Installed" | "Browse" | "Packs">("Installed");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<ModrinthProject[]>([]);
   const [mods, setMods] = useState<ManagedMod[]>([]);
@@ -30,12 +55,15 @@ export function ProfileModsPage({ profileId, minecraftVersion, loaderType = "fab
   const [manifestText, setManifestText] = useState("");
   const [confirmBulkRemove, setConfirmBulkRemove] = useState(false);
   const [projectIcons, setProjectIcons] = useState<Record<string, string>>({});
+  const [packCatalog, setPackCatalog] = useState<S9ModPack[]>(() => parsePackCatalog(bundledPackCatalog) ?? []);
+  const [packCatalogSource, setPackCatalogSource] = useState<PackCatalogSource>("Built in");
   const [browseCategory, setBrowseCategory] = useState<(typeof browseCategories)[number]>("all");
   const [browseSort, setBrowseSort] = useState<"downloads" | "name">("downloads");
   const [searchRetry, setSearchRetry] = useState(0);
   const requestId = useRef(0);
   const flushSearchRef = useRef(false);
   const canManageModrinthMods = loaderType === "fabric";
+  const compatiblePacks = useMemo(() => packCatalog.filter(pack => pack.loader === loaderType && pack.minecraftVersions.includes(minecraftVersion)), [loaderType, minecraftVersion, packCatalog]);
   const normalizedQuery = query.trim();
   const installedIds = useMemo(() => new Set(mods.map(mod => mod.projectId).filter(Boolean)), [mods]);
   const updateIds = useMemo(() => new Set(updates.filter(update => update.updateAvailable).map(update => update.projectId)), [updates]);
@@ -56,6 +84,25 @@ export function ProfileModsPage({ profileId, minecraftVersion, loaderType = "fab
     void ipc.getManagedMods(profileId).then(value => { if (current) setMods(value); }).catch(reason => { if (current) setError(toMessage(reason)); });
     return () => { current = false; };
   }, [profileId, installed]);
+
+  useEffect(() => {
+    if (!installed) return;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 7000);
+    void fetch(PACK_CATALOG_URL, { headers: { Accept: "application/json" }, signal: controller.signal, cache: "no-cache" })
+      .then(async response => {
+        if (!response.ok) throw new Error(`Catalog unavailable (HTTP ${response.status}).`);
+        const text = await response.text();
+        if (text.length > 200_000) throw new Error("Pack catalog exceeded its size limit.");
+        const parsed = parsePackCatalog(JSON.parse(text));
+        if (!parsed) throw new Error("Pack catalog format is not supported.");
+        setPackCatalog(parsed);
+        setPackCatalogSource("GitHub");
+      })
+      .catch(() => { setPackCatalog(parsePackCatalog(bundledPackCatalog) ?? []); setPackCatalogSource("Built in"); })
+      .finally(() => window.clearTimeout(timeout));
+    return () => { window.clearTimeout(timeout); controller.abort(); };
+  }, [installed]);
 
   useEffect(() => {
     const iconMods = mods.filter(mod => !mod.iconDataUrl);
@@ -134,6 +181,20 @@ export function ProfileModsPage({ profileId, minecraftVersion, loaderType = "fab
     catch (reason) { const message = toMessage(reason); if (view === "Browse") setBrowseActionError(message); else setError(message); }
     finally { setWorking(null); }
   };
+  const installPack = async (pack: S9ModPack) => {
+    if (!canManageModrinthMods) { setError("Pack installs currently require a Fabric profile."); return; }
+    const queue = [...new Map(pack.mods.filter(mod => !installedIds.has(mod.projectId)).map(mod => [mod.projectId, mod])).values()];
+    if (!queue.length) { setNotice(`${pack.name} is already installed.`); return; }
+    setBusy(true); setError(""); setNotice("");
+    const failed: string[] = [];
+    for (const mod of queue) {
+      try { setMods(await ipc.installModrinthMod(profileId, mod.projectId, mod.slug)); }
+      catch { failed.push(mod.slug); }
+    }
+    setBusy(false);
+    setNotice(failed.length ? `${queue.length - failed.length} of ${queue.length} mods installed. Could not install: ${failed.join(", ")}.` : `${pack.name} installed · ${queue.length} mods added.`);
+    setView("Installed");
+  };
   const toggle = async (mod: ManagedMod) => {
     setWorking(mod.filename); setError("");
     try {
@@ -191,10 +252,11 @@ export function ProfileModsPage({ profileId, minecraftVersion, loaderType = "fab
     <div className="detail-section-heading"><div><span>PROFILE CONTENT</span><h2>Mods</h2></div></div>
     {!installed ? <p className="profile-mod-note">Install this profile to manage compatible mods.</p> : <>
       <div className="mods-section-topline">
-        <div><span className="mods-section-eyebrow">PROFILE LIBRARY</span><strong>{view === "Installed" ? "Your mods" : "Discover mods"}</strong><small>{view === "Installed" ? `${mods.length} installed · Minecraft ${minecraftVersion}` : `Compatible with Fabric · Minecraft ${minecraftVersion}`}</small></div>
+        <div><span className="mods-section-eyebrow">PROFILE LIBRARY</span><strong>{view === "Installed" ? "Your mods" : view === "Browse" ? "Discover mods" : "S9 Client Packs"}</strong><small>{view === "Installed" ? `${mods.length} installed · Minecraft ${minecraftVersion}` : `Compatible with ${loaderType} · Minecraft ${minecraftVersion}`}</small></div>
         <div className="mods-subtabs" role="tablist" aria-label="Mod views">
           <button role="tab" aria-selected={view === "Installed"} className={view === "Installed" ? "active" : ""} onClick={() => setView("Installed")}>Installed <span>{mods.length}</span></button>
           <button role="tab" aria-label="Browse Modrinth" aria-selected={view === "Browse"} className={view === "Browse" ? "active" : ""} disabled={!canManageModrinthMods} title={!canManageModrinthMods ? "Mod management currently requires a Fabric profile" : undefined} onClick={() => { if (canManageModrinthMods) { setBrowseActionError(""); setView("Browse"); } }}><Plus size={14} /> Add mods</button>
+          <button role="tab" aria-selected={view === "Packs"} className={view === "Packs" ? "active" : ""} onClick={() => setView("Packs")}><PackageOpen size={14} /> S9 packs</button>
         </div>
       </div>
       {view === "Installed" ? <>
@@ -209,7 +271,7 @@ export function ProfileModsPage({ profileId, minecraftVersion, loaderType = "fab
           <button className={`secondary-action mod-enable-action ${mod.enabled ? "is-enabled" : ""}`} disabled={working !== null} onClick={() => void toggle(mod)}>{working === mod.filename ? "Saving…" : mod.enabled ? "Disable" : "Enable"}</button>
           <button className="mod-remove-action" aria-label={`Remove ${displayName(mod)}`} disabled={working !== null} onClick={() => setRemoveTarget(mod)}><Trash2 size={14} /><span>Remove</span></button></div>
         </article>)}</div>}
-      </> : <>
+      </> : view === "Browse" ? <>
         <section className="mods-search-panel" aria-label="Find compatible mods">
           <div className="mods-browse-intro"><div className="mods-browse-icon"><Search size={17} /></div><div><strong>Find your next mod</strong><p>Search Modrinth. Results are checked for this profile’s Minecraft version and Fabric loader.</p></div><span className="mods-target-chip">FABRIC · {minecraftVersion}</span></div>
           <label className="search-field profile-mod-search browse-mod-search"><Search size={17} /><input value={query} onChange={event => { setQuery(event.target.value); setBrowseCategory("all"); }} onKeyDown={event => { if (event.key === "Enter") { flushSearchRef.current = true; setSearchRetry(value => value + 1); } else if (event.key === "Escape" && query) { setQuery(""); setBrowseCategory("all"); } }} placeholder="Search by mod name, feature, or creator" aria-label="Search Modrinth mods" />{query && <button type="button" className="mod-search-clear" aria-label="Clear search" onClick={() => { setQuery(""); setBrowseCategory("all"); }}><X size={15} /></button>}</label>
@@ -232,7 +294,17 @@ export function ProfileModsPage({ profileId, minecraftVersion, loaderType = "fab
             <button className={isInstalled && !hasUpdate ? "secondary-action" : "compact-play"} disabled={working !== null || (isInstalled && !hasUpdate)} onClick={() => void install(mod.projectId, mod.title, mod.slug)}>{working === mod.projectId ? "Installing…" : hasUpdate ? "Update" : isInstalled ? <><Check size={14} /> Installed</> : <><Download size={14} /> Install</>}</button>
           </article>;
         })}</div>
-      </>}
+      </> : <section className="s9-packs-page" aria-label="S9 Client Packs">
+        <div className="s9-packs-heading"><span><small>CURATED FOR S9 CLIENT</small><strong>Ready-to-install mod sets</strong><p>Choose a pack to add compatible mods to this profile. Existing mods and settings are kept.</p></span><i className={packCatalogSource === "GitHub" ? "connected" : ""}><span />{packCatalogSource === "GitHub" ? "GitHub synced" : "Built-in list"}</i></div>
+        {notice && <p className="profile-mod-note" role="status">{notice}</p>}{error && <p className="profile-mod-error" role="alert">{error}</p>}
+        {compatiblePacks.length === 0 ? <div className="mods-empty"><PackageOpen size={18} /><strong>No packs for this profile yet</strong><p>Pack availability depends on its Minecraft version and loader.</p></div> : <div className="s9-pack-grid">{compatiblePacks.map(pack => {
+          const included = new Set(pack.mods.map(mod => mod.projectId));
+          const alreadyInstalled = [...included].filter(projectId => installedIds.has(projectId)).length;
+          const remaining = included.size - alreadyInstalled;
+          return <article className="s9-pack-card" key={pack.id}><div className="s9-pack-icon"><PackageOpen size={19} /></div><div className="s9-pack-copy"><h3>{pack.name}</h3><p>{pack.description}</p><small>{included.size} mods · Fabric · Minecraft {minecraftVersion}</small></div><div className="s9-pack-footer"><span>{alreadyInstalled ? `${alreadyInstalled} of ${included.size} already installed` : "Adds mods without removing files"}</span><button className="compact-play" disabled={busy || remaining === 0 || !canManageModrinthMods} onClick={() => void installPack(pack)}>{busy ? "Installing…" : remaining === 0 ? <><Check size={14} /> Installed</> : <><Download size={14} /> Add pack · {remaining}</>}</button></div></article>;
+        })}</div>}
+        {!canManageModrinthMods && <p className="profile-mod-note">S9 packs currently require a Fabric profile.</p>}
+      </section>}
     </>}
     {removeTarget && <div className="modal-scrim" onClick={() => setRemoveTarget(null)}><section className="settings-popover mod-remove-dialog" role="alertdialog" aria-modal="true" aria-labelledby="remove-mod-heading" onClick={event => event.stopPropagation()}><div><div><small>PROFILE MODS</small><h2 id="remove-mod-heading">Remove {displayName(removeTarget)}?</h2></div></div><p>This removes the mod file from this profile. Other profile files and shared game data stay in place.</p><div className="uninstall-actions"><button className="secondary-action" disabled={working !== null} onClick={() => setRemoveTarget(null)}>Cancel</button><button className="destructive-action" disabled={working !== null} onClick={() => void remove()}>{working ? "Removing…" : "Remove mod"}</button></div></section></div>}
     {confirmUpdates && <div className="modal-scrim" onClick={() => setConfirmUpdates(false)}><section className="settings-popover mod-remove-dialog" role="alertdialog" aria-modal="true" aria-labelledby="update-mods-heading" onClick={event => event.stopPropagation()}><div><div><small>PROFILE MODS</small><h2 id="update-mods-heading">Update {updateIds.size} mod{updateIds.size === 1 ? "" : "s"}?</h2></div></div><p>Each mod will be downloaded and verified through Modrinth. Your current files remain managed by the launcher.</p><div className="uninstall-actions"><button className="secondary-action" disabled={busy} onClick={() => setConfirmUpdates(false)}>Cancel</button><button className="compact-play" disabled={busy} onClick={() => void updateAll()}>{busy ? "Updating…" : "Update"}</button></div></section></div>}

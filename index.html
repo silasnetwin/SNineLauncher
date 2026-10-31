@@ -7,6 +7,25 @@
     <meta name="description" content="Manage and launch your SNine profiles." />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <title>SNine Launcher</title>
+    <style>
+      #startup-screen{position:fixed;inset:0;z-index:99999;display:grid;grid-template-rows:32px 56px minmax(0,1fr) 50px;background:#111216;color:#e9eaf0;font:12px/1.4 "Segoe UI",system-ui,sans-serif;transition:opacity .16s ease,visibility .16s ease}
+      #startup-screen.leaving{opacity:0;visibility:hidden;pointer-events:none}
+      .startup-title{border-bottom:1px solid #ffffff0d;background:#111216}
+      .startup-nav{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:0 16px;border-bottom:1px solid #ffffff10;background:linear-gradient(#1b1c21,#17181c)}
+      .startup-actions{display:flex;gap:8px}
+      .startup-action{width:76px;height:34px;border:1px solid #ffffff0c;border-radius:8px;background:#ffffff05}
+      .startup-workspace{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:0;margin:8px 14px 0;border:1px solid #ffffff12;border-radius:8px;overflow:hidden;background:#111216}
+      .startup-library{padding:34px 38px}
+      .startup-kicker{width:126px;height:7px;margin:0 0 14px;border-radius:4px;background:#b9e46a55}
+      .startup-heading{width:190px;height:22px;margin-bottom:22px;border-radius:5px;background:#ffffff18}
+      .startup-toolbar{height:38px;margin-bottom:24px;border:1px solid #ffffff0c;border-radius:7px;background:#1b1c22}
+      .startup-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:18px}
+      .startup-card{aspect-ratio:1/1;border:1px solid #ffffff0c;border-radius:10px;background:linear-gradient(145deg,#ffffff0a,#ffffff02)}
+      .startup-aside{border-left:1px solid #ffffff10;padding:22px 16px}
+      .startup-row{height:54px;margin-bottom:12px;border:1px solid #ffffff0a;border-radius:8px;background:#ffffff05}
+      .startup-footer{border-top:1px solid #ffffff0c;margin:0 14px 8px;background:#111216}
+      @media(max-width:850px){.startup-workspace{grid-template-columns:minmax(0,1fr) 250px;margin-inline:8px}.startup-library{padding:26px 20px}}
+    </style>
   </head>
-  <body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>
+  <body><div id="root"></div><div id="startup-screen" role="status" aria-label="Opening SNine Launcher"><div class="startup-title"></div><div class="startup-nav"><div class="startup-actions"><i class="startup-action"></i><i class="startup-action"></i><i class="startup-action"></i></div></div><div class="startup-workspace"><main class="startup-library"><div class="startup-kicker"></div><div class="startup-heading"></div><div class="startup-toolbar"></div><div class="startup-cards"><div class="startup-card"></div><div class="startup-card"></div><div class="startup-card"></div><div class="startup-card"></div></div></main><aside class="startup-aside"><div class="startup-row"></div><div class="startup-row"></div><div class="startup-row"></div></aside></div><div class="startup-footer"></div></div><script type="module" src="/src/main.tsx"></script></body>
 </html>

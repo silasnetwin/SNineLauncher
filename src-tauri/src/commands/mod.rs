@@ -17,6 +17,63 @@ use tauri::State;
 use tauri::{AppHandle, Emitter, Manager};
 
 #[tauri::command]
+pub async fn wait_for_game_window(pid: u32) -> Result<bool, String> {
+    if pid == 0 {
+        return Err("Minecraft did not return a process id.".into());
+    }
+    #[cfg(windows)]
+    {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
+        while tokio::time::Instant::now() < deadline {
+            if windows_process_has_game_window(pid) {
+                return Ok(true);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        Ok(false)
+    }
+    #[cfg(not(windows))]
+    {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        Ok(true)
+    }
+}
+
+#[cfg(windows)]
+fn windows_process_has_game_window(pid: u32) -> bool {
+    use std::ffi::c_void;
+    #[repr(C)]
+    struct Rect { left: i32, top: i32, right: i32, bottom: i32 }
+    #[link(name = "user32")]
+    extern "system" {
+        fn EnumWindows(callback: Option<unsafe extern "system" fn(*mut c_void, isize) -> i32>, data: isize) -> i32;
+        fn IsWindowVisible(window: *mut c_void) -> i32;
+        fn GetWindowThreadProcessId(window: *mut c_void, process_id: *mut u32) -> u32;
+        fn GetWindowRect(window: *mut c_void, rect: *mut Rect) -> i32;
+    }
+    unsafe extern "system" fn inspect(window: *mut c_void, data: isize) -> i32 {
+        let (wanted_pid, found) = &mut *(data as *mut (u32, bool));
+        let mut process_id = 0;
+        let mut rect = Rect { left: 0, top: 0, right: 0, bottom: 0 };
+        if IsWindowVisible(window) != 0
+            && GetWindowThreadProcessId(window, &mut process_id) != 0
+            && process_id == *wanted_pid
+            && GetWindowRect(window, &mut rect) != 0
+            && rect.right - rect.left >= 300
+            && rect.bottom - rect.top >= 200
+        {
+            *found = true;
+            0
+        } else {
+            1
+        }
+    }
+    let mut state = (pid, false);
+    unsafe { EnumWindows(Some(inspect), &mut state as *mut (u32, bool) as isize); }
+    state.1
+}
+
+#[tauri::command]
 pub async fn bootstrap(db: State<'_, Arc<Database>>) -> Result<Bootstrap, String> {
     let database = Arc::clone(&db);
     tokio::task::spawn_blocking(move || database.bootstrap())
@@ -693,6 +750,14 @@ pub async fn social_get_friends(
 }
 
 #[tauri::command]
+pub async fn social_get_client_cosmetics(
+    auth: State<'_, Arc<AuthService>>,
+    social: State<'_, Arc<SocialService>>,
+) -> Result<crate::social::ClientCosmeticsSnapshot, String> {
+    social.client_cosmetics(&auth).await
+}
+
+#[tauri::command]
 pub async fn social_get_messages(
     friend_uuid: String,
     auth: State<'_, Arc<AuthService>>,
@@ -730,6 +795,15 @@ pub async fn social_respond_to_request(
     social
         .respond_to_request(&auth, &requester_uuid, accept)
         .await
+}
+
+#[tauri::command]
+pub async fn social_cancel_friend_request(
+    friend_uuid: String,
+    auth: State<'_, Arc<AuthService>>,
+    social: State<'_, Arc<SocialService>>,
+) -> Result<FriendsSnapshot, String> {
+    social.cancel_friend_request(&auth, &friend_uuid).await
 }
 
 #[tauri::command]

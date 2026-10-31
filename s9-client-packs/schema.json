@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SNine Client Pack Catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "version", "packs"],
+  "properties": {
+    "format": { "const": "snine-pack-catalog" },
+    "version": { "const": 1 },
+    "packs": {
+      "type": "array",
+      "maxItems": 24,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "description", "loader", "minecraftVersions", "mods"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,47}$" },
+          "name": { "type": "string", "maxLength": 64 },
+          "description": { "type": "string", "maxLength": 240 },
+          "loader": { "enum": ["fabric", "quilt", "forge", "neoforge", "vanilla"] },
+          "minecraftVersions": { "type": "array", "items": { "type": "string", "pattern": "^[a-zA-Z0-9.+-]{1,32}$" } },
+          "mods": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["projectId", "slug"],
+              "properties": {
+                "projectId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" },
+                "slug": { "type": "string", "pattern": "^[a-zA-Z0-9_-]{1,96}$" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

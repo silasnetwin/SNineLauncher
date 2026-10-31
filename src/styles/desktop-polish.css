@@ -32,6 +32,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [contentedita
 .settings-title-icon .svg-repo-icon { width: 19px; height: 19px; flex-basis: 19px; }
 .bottom-downloads > .svg-repo-icon { width: 17px; height: 17px; flex-basis: 17px; }
 .account-control { height: 34px; max-width: 190px; display: inline-flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #d5d5da; font: inherit; font-size: 12px; cursor: pointer; }
+.account-control > span:nth-child(2) { min-width: 112px; }
 .account-control:hover, .account-control[aria-expanded="true"] { background: #ffffff0d; border-color: #ffffff0c; }
 .account-control > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account-control > svg:last-child { flex: 0 0 auto; color: #85858e; }
@@ -41,7 +42,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [contentedita
 .minecraft-head-layer { position: absolute; inset: 0; background-image: var(--skin-texture); background-repeat: no-repeat; background-size: 800% 800%; image-rendering: pixelated; pointer-events: none; }
 .minecraft-head-face { background-position: 14.285714% 14.285714%; }
 .minecraft-head-hat { background-position: 71.428571% 14.285714%; }
-.account-avatar.avatar-fallback { display: grid; place-items: center; color: #eef0e8; font-size: 10px; font-weight: 650; }
+.account-avatar.avatar-fallback { position: relative; display: block; overflow: hidden; color: #eef0e8; }
+.minecraft-head-quick { position: absolute; inset: 0; width: 100%; height: 100%; display: block; image-rendering: pixelated; object-fit: cover; }
+.has-quick-minecraft-head { position: relative; overflow: hidden; }
 .account-avatar.has-minecraft-skin { position: relative; display: block; overflow: hidden; border-radius: 0; }
 .account-popover { position: absolute; z-index: 40; top: calc(100% - 3px); right: 8px; width: 230px; padding: 12px; border: 1px solid rgba(255,255,255,.11); border-radius: 9px; background: #202127; box-shadow: 0 12px 32px #0008; color: #f4f4f5; }
 .account-popover > strong, .account-popover > small { display: block; }
@@ -86,6 +89,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [contentedita
 .cosmetics-message.error { justify-content: space-between; border-color: rgba(240,120,120,.24); color: #f2b5b5; background: rgba(240,100,100,.06); }
 .cosmetics-section-title { margin: 25px 0 12px; display: flex; align-items: end; justify-content: space-between; }
 .cosmetics-section-title h2 { margin: 4px 0 0; font-size: 17px; }
+.client-cosmetics-section { margin: 6px 0 24px; padding: 0 0 20px; border-bottom: 1px solid var(--line); }
+.client-cosmetics-note, .client-cosmetics-state { margin: 8px 0 12px; color: #a4a4ad; font-size: 11px; line-height: 1.5; }
+.client-cosmetics-state.error { color: #ffafb5; }
+.client-cosmetic-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 9px; }
+.client-cosmetic-card { min-width: 0; min-height: 68px; display: flex; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: #17181d; }
+.client-cosmetic-card > img, .client-cosmetic-placeholder { width: 46px; height: 46px; flex: 0 0 46px; display: grid; place-items: center; border-radius: 7px; background: #22242a; object-fit: contain; }
+.client-cosmetic-placeholder { color: #b9e46a; }
+.client-cosmetic-card > div:nth-child(2) { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.client-cosmetic-card strong { overflow: hidden; color: #e7e7eb; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.client-cosmetic-card small { color: #9b9ba4; font-size: 10px; text-transform: capitalize; }
 .skin-upload-controls { display: flex; align-items: end; gap: 10px; }
 .skin-upload-controls label { display: grid; gap: 4px; color: #a4a4ad; font-size: 10px; }
 .skin-upload-controls select { min-height: 34px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; background: #1b1b20; color: #ededf0; }
@@ -144,7 +157,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [contentedita
 .app-shell[data-corners] { --launcher-corner-radius: 4px; }
 .app-shell[data-corners="square"] { --launcher-corner-radius: 0px; }
 .app-shell[data-corners="rounded"] { --launcher-corner-radius: 9px; }
-.app-shell[data-corners] * { border-radius: var(--launcher-corner-radius) !important; }
 .app-shell[data-corners] .presence-dot,
 .app-shell[data-corners] .social-unread-dot,
 .app-shell[data-corners] .social-activity > button > i,

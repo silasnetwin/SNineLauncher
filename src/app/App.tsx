@@ -1,20 +1,13 @@
-import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight, Check, ChevronDown, ChevronRight, CircleUserRound, Copy, Download, ExternalLink, FileText, Gamepad2, Grid2X2, History, LibraryBig, List, MessageSquareText, Minus, Pencil, Plus, RotateCcw, Search, Settings2, Sparkles, Square, Users, X, UserPlus, LoaderCircle, Trash2 } from "lucide-react";
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ArrowLeft, Check, ChevronDown, ChevronRight, CircleUserRound, Copy, Download, ExternalLink, FileText, Gamepad2, Grid2X2, History, LibraryBig, List, Minus, Pencil, Plus, RotateCcw, Search, Settings2, Sparkles, X, UserPlus, LoaderCircle, Trash2 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { ipc, type ActivityEntry, type AuthState, type BlockIconEntry, type DeviceLoginPrompt, type DownloadProgress, type LaunchVerification, type MinecraftVersionInfo, type Profile, type ProfileManageInfo, type RuntimeStatus, type SafeAccount, type StorageInfo, type LoaderType, type MinecraftWindowSettings } from "../lib/ipc";
-import { findSelectedProfile } from "../lib/profile-utils";
+import { ipc, type AuthState, type BlockIconEntry, type DeviceLoginPrompt, type DownloadProgress, type LaunchVerification, type MinecraftVersionInfo, type Profile, type ProfileManageInfo, type RuntimeStatus, type SafeAccount, type StorageInfo, type LoaderType, type MinecraftWindowSettings } from "../lib/ipc";
+import { findSelectedProfile, insertCreatedProfile } from "../lib/profile-utils";
 import { markStartup } from "../lib/startup";
-import snineLauncherIcon from "../assets/brand/snine-launcher-icon.png";
 import { ProfileCard, ProfileCover } from "./ProfileCard";
-import { BlockIconPicker, insertCreatedProfile, ProfileCreationForm } from "./ProfileManagementForms";
-import { ProfileModsPage } from "./ProfileModsPage";
-import { ProfileResourcePacksPage } from "./ProfileResourcePacksPage";
-import { ProfileContentPage } from "./ProfileContentPage";
-import { SocialPanel, type SocialTab } from "./SocialPanel";
-import { CosmeticsPage } from "./CosmeticsPage";
 import { MinecraftHead } from "./MinecraftHead";
 import { SVGRepoIcon } from "./SVGRepoIcon";
 import settingsGearSvg from "../assets/icons/settings-gear.svg";
@@ -22,30 +15,28 @@ import gamepadSvg from "../assets/icons/gamepad.svg";
 import downloadArrowSvg from "../assets/icons/download-arrow.svg";
 import databaseStorageSvg from "../assets/icons/database-storage.svg";
 
-type AppPage = "Library" | "Cosmetics";
 type LibraryTab = "Clients" | "Profiles" | "Favorites";
-type SideTab = SocialTab | "Downloads";
+type SideTab = "Friends" | "Downloads";
 type CornerStyle = "square" | "balanced" | "rounded";
 type SettingsTab = "Appearance" | "Minecraft" | "Downloads" | "Storage";
 type LibraryPreferences = { tab: LibraryTab; view: "grid" | "list"; sort: string; installedOnly: boolean; groupFilter: string; loaderFilter: string; statusFilter: string; javaFilter: string; clientFilter: string };
 type LauncherCommand = { id: string; label: string; description: string; keywords: string; icon: ReactNode; run: () => void };
-const RECENTS_KEY = "snine.launcher.recent-profiles.v1";
 const CORNER_STYLE_KEY = "snine.launcher.corner-style.v1";
 const LIBRARY_PREFS_KEY = "snine.launcher.library-preferences.v1";
-const LAUNCHER_VERSION = "1.0.12";
+const LAUNCHER_VERSION = "1.0.13";
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 const requiredJavaMajor = (profile: Profile) => ["26.1.2", "26.2", "26.3"].includes(profile.minecraftVersion) ? 25 : 21;
+const ProfileCreationForm = lazy(() => import("./ProfileManagementForms").then(module => ({ default: module.ProfileCreationForm })));
+const BlockIconPicker = lazy(() => import("./ProfileManagementForms").then(module => ({ default: module.BlockIconPicker })));
+const ProfileModsPage = lazy(() => import("./ProfileModsPage").then(module => ({ default: module.ProfileModsPage })));
+const ProfileResourcePacksPage = lazy(() => import("./ProfileResourcePacksPage").then(module => ({ default: module.ProfileResourcePacksPage })));
+const ProfileContentPage = lazy(() => import("./ProfileContentPage").then(module => ({ default: module.ProfileContentPage })));
+const SocialPanel = lazy(() => import("./SocialPanel").then(module => ({ default: module.SocialPanel })));
 
 export function App() {
-  const [page, setPage] = useState<AppPage>("Library");
-  const [history, setHistory] = useState<AppPage[]>(["Library"]);
-  const [historyIndex, setHistoryIndex] = useState(0);
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [profileViewId, setProfileViewId] = useState<string | null>(null);
-  const [recentIds, setRecentIds] = useState<string[]>(() => isTauri() ? [] : readIds(RECENTS_KEY));
-  const [recentMenuOpen, setRecentMenuOpen] = useState(false);
   const [libraryTab, setLibraryTab] = useState<LibraryTab>(() => readLibraryPreferences().tab);
   const [sideTab, setSideTab] = useState<SideTab>("Friends");
   const [search, setSearch] = useState("");
@@ -65,9 +56,6 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("Appearance");
   const [cornerStyle, setCornerStyle] = useState<CornerStyle>(readCornerStyle);
-  const [feedbackOpen, setFeedbackOpen] = useState(false);
-  const [feedbackText, setFeedbackText] = useState("");
-  const [brandMenuOpen, setBrandMenuOpen] = useState(false);
   const [createProfileOpen, setCreateProfileOpen] = useState(false);
   const [newProfileName, setNewProfileName] = useState("");
   const [newProfileMemoryMb, setNewProfileMemoryMb] = useState("");
@@ -84,10 +72,8 @@ export function App() {
   const [iconPickerTarget, setIconPickerTarget] = useState<{ kind: "create"; version: string } | { kind: "profile"; id: string; version: string } | null>(null);
   const [minecraftMemoryMb, setMinecraftMemoryMb] = useState(4096);
   const [downloadConcurrency, setDownloadConcurrency] = useState(4);
-  const [minimizeOnGameStart, setMinimizeOnGameStart] = useState(false);
   const [windowSettings, setWindowSettings] = useState<MinecraftWindowSettings>({ width: 1280, height: 720, fullscreen: false });
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
-  const [isMaximized, setIsMaximized] = useState(false);
   const [toast, setToast] = useState("");
   const [launcherUpdate, setLauncherUpdate] = useState<Update | null>(null);
   const [launcherUpdateBusy, setLauncherUpdateBusy] = useState(false);
@@ -109,9 +95,7 @@ export function App() {
   const [resolvedProfileStates, setResolvedProfileStates] = useState<Record<string, string>>({});
   const searchRef = useRef<HTMLInputElement>(null);
   const commandInputRef = useRef<HTMLInputElement>(null);
-  const recentRef = useRef<HTMLDivElement>(null);
   const authRef = useRef<HTMLDivElement>(null);
-  const brandMenuRef = useRef<HTMLDivElement>(null);
   const toolbarActionsRef = useRef<HTMLDivElement>(null);
   const toastTimer = useRef<number | undefined>(undefined);
   const bootstrapStarted = useRef(false);
@@ -147,12 +131,8 @@ export function App() {
     if (sortLabel === "Loader") return filtered.sort((a, b) => a.loaderType.localeCompare(b.loaderType) || a.name.localeCompare(b.name));
     if (sortLabel === "Group") return filtered.sort((a, b) => (a.groupName ?? "").localeCompare(b.groupName ?? "") || a.name.localeCompare(b.name));
     if (sortLabel === "Java runtime") return filtered.sort((a, b) => requiredJavaMajor(a) - requiredJavaMajor(b) || a.name.localeCompare(b.name));
-    if (sortLabel === "Recently played") return filtered.sort((a, b) => {
-      const left = recentIds.indexOf(a.id); const right = recentIds.indexOf(b.id);
-      return (left < 0 ? Number.MAX_SAFE_INTEGER : left) - (right < 0 ? Number.MAX_SAFE_INTEGER : right);
-    });
     return filtered;
-  }, [profiles, deferredSearch, sortLabel, libraryTab, installedOnly, recentIds, groupFilter, loaderFilter, statusFilter, javaFilter, clientFilter, resolvedProfileStates]);
+  }, [profiles, deferredSearch, sortLabel, libraryTab, installedOnly, groupFilter, loaderFilter, statusFilter, javaFilter, clientFilter, resolvedProfileStates]);
   const activeLibraryFilterCount = [installedOnly, groupFilter !== "all", loaderFilter !== "all", statusFilter !== "all", javaFilter !== "all", clientFilter !== "all"].filter(Boolean).length;
   const profileGroups = useMemo(() => [...new Set(profiles.map(profile => (profile.groupName ?? "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [profiles]);
 
@@ -199,9 +179,7 @@ export function App() {
     bootstrapStarted.current = true;
     void ipc.bootstrap().then(state => {
       setProfiles(state.profiles);
-      setActivity(state.activity);
       setSelectedId(state.selectedProfileId);
-      setRecentIds(state.recentProfileIds.length ? state.recentProfileIds : state.selectedProfileId ? [state.selectedProfileId] : []);
       markStartup("local_cache_loaded");
       void Promise.all(state.profiles.map(profile => ipc.resolveProfileState(profile.id).catch(() => null))).then(resolved => {
         const states: Record<string, string> = {};
@@ -214,6 +192,7 @@ export function App() {
       });
     }).catch(error => {
       console.error("Launcher bootstrap failed", error);
+      markStartup("local_cache_loaded");
       showToast("Local launcher data could not be loaded.");
     });
   }, []);
@@ -247,9 +226,10 @@ export function App() {
       listen<{ profileId: string; state: string; pid: number | null; message: string | null }>("launch-state", event => {
         const { profileId, state, message } = event.payload;
         setPlayingIds(ids => state === "running" ? ids.includes(profileId) ? ids : [...ids, profileId] : ids.filter(id => id !== profileId));
-        if (state === "running" && minimizeOnGameStart) void getCurrentWindow().minimize().catch(error => console.warn("Could not minimize launcher after game start", error));
+        if (state === "running" && event.payload.pid) void ipc.waitForGameWindow(event.payload.pid).then(ready => {
+          if (ready) return getCurrentWindow().close();
+        }).catch(error => console.warn("Could not close launcher after Minecraft opened", error));
         void ipc.resolveProfileState(profileId).then(resolved => setResolvedProfileStates(current => ({ ...current, [profileId]: resolved.state }))).catch(() => undefined);
-        if (state === "exited" || state === "crashed") void ipc.bootstrap().then(snapshot => setActivity(snapshot.activity)).catch(() => undefined);
         if (state === "crashed") showToast("Minecraft closed unexpectedly. Open profile Manage to inspect logs or repair the installation.");
         else if (message) showToast(message);
       }),
@@ -265,7 +245,7 @@ export function App() {
         const { profileId, state } = event.payload;
         if (state === "ready") {
           void ipc.resolveProfileState(profileId).then(resolved => setResolvedProfileStates(current => ({ ...current, [profileId]: resolved.state }))).catch(() => undefined);
-          void ipc.bootstrap().then(local => { setProfiles(local.profiles); setActivity(local.activity); setSelectedId(local.selectedProfileId); }).catch(() => undefined);
+          void ipc.bootstrap().then(local => { setProfiles(local.profiles); setSelectedId(local.selectedProfileId); }).catch(() => undefined);
         } else if (state === "failed") {
           void ipc.resolveProfileState(profileId).then(resolved => setResolvedProfileStates(current => ({ ...current, [profileId]: resolved.state }))).catch(() => undefined);
         } else {
@@ -275,11 +255,11 @@ export function App() {
     ]).then(unlisteners => { if (active) stops.push(...unlisteners); else unlisteners.forEach(stop => stop()); })
       .catch(error => console.warn("Could not subscribe to launch events", error));
     return () => { active = false; stops.forEach(stop => stop()); };
-  }, [minimizeOnGameStart]);
+  }, []);
   useEffect(() => {
     if (!settingsOpen || !isTauri()) return;
-    void Promise.all([ipc.getMinecraftMemory(), ipc.getDownloadConcurrency(), ipc.getMinimizeOnGameStart(), ipc.getStorageInfo(), ipc.getMinecraftWindowSettings()]).then(([memory, concurrency, minimize, storage, window]) => {
-      setMinecraftMemoryMb(memory); setDownloadConcurrency(concurrency); setMinimizeOnGameStart(minimize);
+    void Promise.all([ipc.getMinecraftMemory(), ipc.getDownloadConcurrency(), ipc.getStorageInfo(), ipc.getMinecraftWindowSettings()]).then(([memory, concurrency, storage, window]) => {
+      setMinecraftMemoryMb(memory); setDownloadConcurrency(concurrency);
       setStorageInfo(storage); setWindowSettings(window);
     }).catch(error => showToast(`Could not load launcher settings: ${String(error)}`));
   }, [settingsOpen]);
@@ -315,13 +295,6 @@ export function App() {
     return () => { document.removeEventListener("pointerdown", close, true); document.removeEventListener("keydown", key); };
   }, [authMenuOpen]);
   useEffect(() => {
-    if (!brandMenuOpen) return;
-    const close = (event: PointerEvent) => { if (!brandMenuRef.current?.contains(event.target as Node)) setBrandMenuOpen(false); };
-    const key = (event: KeyboardEvent) => { if (event.key === "Escape") setBrandMenuOpen(false); };
-    document.addEventListener("pointerdown", close, true); document.addEventListener("keydown", key);
-    return () => { document.removeEventListener("pointerdown", close, true); document.removeEventListener("keydown", key); };
-  }, [brandMenuOpen]);
-  useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     let unlisten: (() => void) | undefined;
     let active = true;
@@ -346,7 +319,6 @@ export function App() {
         setProfiles(items => items.map(item => item.id === profile.id ? { ...item, clientReady: true, clientVersion: result.clientVersion, minecraftVersion: result.minecraftVersion } : item));
         const localState = await ipc.bootstrap();
         setProfiles(localState.profiles);
-        setActivity(localState.activity);
         setSelectedId(localState.selectedProfileId);
       }
       const requiredJava = requiredJavaMajor(profile);
@@ -361,7 +333,6 @@ export function App() {
       const result = await ipc.installMinecraftProfile(profile.id);
       const state = await ipc.bootstrap();
       setProfiles(state.profiles);
-      setActivity(state.activity);
       setSelectedId(state.selectedProfileId);
       showToast(profile.loaderType === "fabric" || profile.loaderType === "quilt" ? `Minecraft ${result.minecraftVersion} with ${profile.loaderType === "quilt" ? "Quilt" : "Fabric"} ${result.loaderVersion}${profile.snineclientEnabled ? " and SNineClient" : ""} is ready (${result.libraryCount} libraries, ${result.assetCount} assets).` : `Vanilla Minecraft ${result.minecraftVersion} is ready (${result.libraryCount} libraries, ${result.assetCount} assets).`);
     } catch (error) {
@@ -380,9 +351,7 @@ export function App() {
       setPlayingIds(ids => ids.includes(profile.id) ? ids : [...ids, profile.id]);
       const result = await ipc.launchMinecraftProfile(profile.id);
       if (result.state !== "running") setPlayingIds(ids => ids.filter(id => id !== profile.id));
-      const state = await ipc.bootstrap();
-      setActivity(state.activity);
-      setRecentIds(state.recentProfileIds);
+      await ipc.bootstrap();
       showToast(`Started ${profile.name}.`);
     } catch (error) {
       setPlayingIds(ids => ids.filter(id => id !== profile.id));
@@ -393,7 +362,7 @@ export function App() {
   }, [playingIds]);
   const reloadLocalData = useCallback(async () => {
     const state = await ipc.bootstrap();
-    setProfiles(state.profiles); setActivity(state.activity); setSelectedId(state.selectedProfileId); setRecentIds(state.recentProfileIds);
+    setProfiles(state.profiles); setSelectedId(state.selectedProfileId);
     if (isTauri()) {
       const resolved = await Promise.all(state.profiles.map(profile => ipc.resolveProfileState(profile.id).catch(() => null)));
       const states: Record<string, string> = {};
@@ -464,15 +433,6 @@ export function App() {
   useEffect(() => () => {
     if (toastTimer.current !== undefined) window.clearTimeout(toastTimer.current);
   }, []);
-  useEffect(() => { if (!isTauri()) saveIds(RECENTS_KEY, recentIds); }, [recentIds]);
-  useEffect(() => {
-    if (!recentMenuOpen) return;
-    const onPointerDown = (event: PointerEvent) => { if (!recentRef.current?.contains(event.target as Node)) setRecentMenuOpen(false); };
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") setRecentMenuOpen(false); };
-    document.addEventListener("pointerdown", onPointerDown, true);
-    document.addEventListener("keydown", onKeyDown);
-    return () => { document.removeEventListener("pointerdown", onPointerDown, true); document.removeEventListener("keydown", onKeyDown); };
-  }, [recentMenuOpen]);
   useEffect(() => {
     if (!sortOpen && !viewMenuOpen) return;
     const onPointerDown = (event: PointerEvent) => { if (!toolbarActionsRef.current?.contains(event.target as Node)) { setSortOpen(false); setViewMenuOpen(false); } };
@@ -483,23 +443,7 @@ export function App() {
   }, [sortOpen, viewMenuOpen]);
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
-    const appWindow = getCurrentWindow();
-    let active = true;
-    let unlisten: (() => void) | undefined;
-    const syncMaximized = () => {
-      void appWindow.isMaximized().then(maximized => {
-        if (active) setIsMaximized(maximized);
-      });
-    };
-    syncMaximized();
-    void appWindow.onResized(syncMaximized).then(stopListening => {
-      if (active) unlisten = stopListening;
-      else stopListening();
-    }).catch(error => console.warn("Could not subscribe to window resize events", error));
-    return () => {
-      active = false;
-      unlisten?.();
-    };
+    return;
   }, []);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -510,7 +454,7 @@ export function App() {
         setCommandSelection(0);
       } else if ((event.ctrlKey || event.metaKey) && event.shiftKey && ["Digit1", "Digit2", "Digit3"].includes(event.code) && !commandPaletteOpen) {
         event.preventDefault();
-        setPage("Library"); setProfileViewId(null);
+        setProfileViewId(null);
         setLibraryTab(event.code === "Digit1" ? "Clients" : event.code === "Digit2" ? "Profiles" : "Favorites");
       } else if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "f" && !commandPaletteOpen) {
         event.preventDefault();
@@ -529,27 +473,15 @@ export function App() {
     const frame = window.requestAnimationFrame(() => commandInputRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
   }, [commandPaletteOpen]);
-  const navigate = (next: AppPage) => {
-    if (next === page) return;
-    const nextHistory = history.slice(0, historyIndex + 1);
-    nextHistory.push(next);
-    setHistory(nextHistory);
-    setHistoryIndex(nextHistory.length - 1);
-    setPage(next);
+  const navigate = () => {
     setSideTab("Friends");
     setProfileViewId(null);
   };
-  const moveHistory = (direction: -1 | 1) => {
-    const index = Math.min(history.length - 1, Math.max(0, historyIndex + direction));
-    if (index !== historyIndex) { setHistoryIndex(index); setPage(history[index]); }
-  };
   const selectProfile = useCallback(async (profile: Profile, openDetails = true) => {
     setSelectedId(profile.id);
-    setRecentIds(current => [profile.id, ...current.filter(id => id !== profile.id)].slice(0, 8));
     if (isTauri()) {
       await ipc.selectProfile(profile.id);
-      const state = await ipc.bootstrap();
-      setActivity(state.activity);
+      await ipc.bootstrap();
     }
     if (openDetails) setProfileViewId(profile.id);
   }, []);
@@ -560,7 +492,7 @@ export function App() {
     setProfiles(items => items.map(item => item.id === id ? { ...item, [flag]: value } : item));
     if (isTauri()) void (flag === "favorite" ? ipc.setFavorite(id, value) : ipc.setHidden(id, value)).then(async () => {
       const state = await ipc.bootstrap();
-      setActivity(state.activity);
+      setProfiles(state.profiles);
     }).catch(error => {
       setProfiles(items => items.map(item => item.id === id ? { ...item, [flag]: !value } : item));
       showToast(`Could not save profile ${flag}.`);
@@ -592,18 +524,17 @@ export function App() {
     const onNewProfile = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "n" || event.altKey || commandPaletteOpen) return;
       event.preventDefault();
-      setPage("Library"); setProfileViewId(null); addProfile();
+      setProfileViewId(null); addProfile();
     };
     window.addEventListener("keydown", onNewProfile);
     return () => window.removeEventListener("keydown", onNewProfile);
   }, [addProfile, commandPaletteOpen]);
   const launcherCommands = useMemo<LauncherCommand[]>(() => {
     const commands: LauncherCommand[] = [
-      { id: "library", label: "Go to Library", description: "Browse your Minecraft profiles", keywords: "home clients profiles", icon: <LibraryBig size={16} />, run: () => { navigate("Library"); setProfileViewId(null); } },
-      { id: "cosmetics", label: "Open Cosmetics", description: "Preview skins and manage capes", keywords: "skin cape appearance", icon: <Sparkles size={16} />, run: () => navigate("Cosmetics") },
-      { id: "downloads", label: "Open Downloads", description: "View transfer and install progress", keywords: "queue transfer progress", icon: <SVGRepoIcon src={downloadArrowSvg} />, run: () => { navigate("Library"); setSideTab("Downloads"); } },
+      { id: "library", label: "Go to Library", description: "Browse your Minecraft profiles", keywords: "home clients profiles", icon: <LibraryBig size={16} />, run: () => { navigate(); setProfileViewId(null); } },
+      { id: "downloads", label: "Open Downloads", description: "View transfer and install progress", keywords: "queue transfer progress", icon: <SVGRepoIcon src={downloadArrowSvg} />, run: () => { navigate(); setSideTab("Downloads"); } },
       { id: "settings", label: "Open Settings", description: "Appearance, Minecraft, downloads and storage", keywords: "preferences configure", icon: <SVGRepoIcon src={settingsGearSvg} />, run: () => setSettingsOpen(true) },
-      { id: "create-profile", label: "Create a profile", description: "Set up a Minecraft version and loader", keywords: "new instance client", icon: <Plus size={16} />, run: () => { navigate("Library"); addProfile(); } },
+      { id: "create-profile", label: "Create a profile", description: "Set up a Minecraft version and loader", keywords: "new instance client", icon: <Plus size={16} />, run: () => { navigate(); addProfile(); } },
     ];
     for (const profile of profiles.filter(item => !item.hidden)) {
       commands.push({
@@ -620,7 +551,7 @@ export function App() {
         description: "Show profile details and management tools",
         keywords: `${profile.name} details manage settings`,
         icon: <ChevronRight size={16} />,
-        run: () => { navigate("Library"); void selectProfile(profile, true); },
+        run: () => { navigate(); void selectProfile(profile, true); },
       });
     }
     return commands;
@@ -662,10 +593,8 @@ export function App() {
         created = await ipc.createProfile({ name: trimmedName, minecraftVersion: newMinecraftVersion, loaderType: newLoaderType, loaderVersion: ["fabric", "quilt"].includes(newLoaderType) ? newLoaderVersion || null : null, snineclientEnabled: newSnineEnabled, memoryMb, iconId: newProfileIconId });
         setProfiles(items => insertCreatedProfile(items, created));
         setSelectedId(created.id);
-        setRecentIds(current => [created.id, ...current.filter(id => id !== created.id)].slice(0, 8));
         setProfileViewId(created.id);
         setCreateProfileOpen(false);
-        void ipc.bootstrap().then(state => setActivity(state.activity)).catch(() => undefined);
         // The profile is visible before this existing async installation pipeline starts.
         void installClient(created);
       } else {
@@ -679,14 +608,12 @@ export function App() {
       showToast(`Could not create profile: ${String(error).replace(/^Error: /, "")}`);
       return;
     }
-    setRecentIds(current => [created.id, ...current.filter(id => id !== created.id)].slice(0, 8));
   };
   const renameProfile = async (profile: Profile, name: string) => {
     try {
       if (isTauri()) {
         const updated = await ipc.renameProfile(profile.id, name);
         setProfiles(items => items.map(item => item.id === profile.id ? updated : item));
-        const state = await ipc.bootstrap(); setActivity(state.activity);
       } else setProfiles(items => items.map(item => item.id === profile.id ? { ...item, name: name.trim() } : item));
       showToast("Profile renamed.");
     } catch (error) { showToast(`Could not rename profile: ${String(error)}`); }
@@ -703,22 +630,18 @@ export function App() {
     try {
       if (isTauri()) await ipc.deleteEmptyProfile(deleteTarget.id);
       setProfiles(items => items.filter(item => item.id !== deleteTarget.id));
-      setRecentIds(items => items.filter(id => id !== deleteTarget.id));
       if (selectedId === deleteTarget.id) setSelectedId("snineclient-default");
       setProfileViewId(null); setDeleteTarget(null);
-      const state = await ipc.bootstrap(); setActivity(state.activity); setSelectedId(state.selectedProfileId);
+      const state = await ipc.bootstrap(); setSelectedId(state.selectedProfileId);
       showToast("Profile deleted.");
     } catch (error) { showToast(`Could not delete profile: ${String(error)}`); }
   };
-  const windowAction = async (action: "minimize" | "toggleMaximize" | "close") => {
+  const windowAction = async (action: "minimize" | "close") => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     try {
       const appWindow = getCurrentWindow();
       if (action === "minimize") await appWindow.minimize();
-      else if (action === "toggleMaximize") {
-        await appWindow.toggleMaximize();
-        setIsMaximized(await appWindow.isMaximized());
-      } else await appWindow.close();
+      else await appWindow.close();
     } catch (error) {
       console.error(`Failed to ${action} launcher window`, error);
     }
@@ -779,11 +702,6 @@ export function App() {
     try { await ipc.setDownloadConcurrency(value); showToast(`Download concurrency set to ${value}.`); }
     catch (error) { showToast(error instanceof Error ? error.message : String(error)); }
   };
-  const saveMinimizeOnGameStart = async (value: boolean) => {
-    setMinimizeOnGameStart(value);
-    try { await ipc.setMinimizeOnGameStart(value); }
-    catch (error) { setMinimizeOnGameStart(!value); showToast(error instanceof Error ? error.message : String(error)); }
-  };
   const saveWindowSettings = async () => {
     if (!Number.isInteger(windowSettings.width) || windowSettings.width < 640 || windowSettings.width > 7680 || !Number.isInteger(windowSettings.height) || windowSettings.height < 480 || windowSettings.height > 4320) { showToast("Resolution must be between 640×480 and 7680×4320."); return; }
     try { await ipc.setMinecraftWindowSettings(windowSettings); showToast("Minecraft window settings saved for the next launch."); }
@@ -804,32 +722,14 @@ export function App() {
 
   return <div className="app-shell" data-corners={cornerStyle}>
     <header className="topbar">
-      <div className="brand-menu-wrap" ref={brandMenuRef}>
-        <button className="brand-menu" aria-label="SNine Launcher menu" aria-haspopup="menu" aria-expanded={brandMenuOpen} onClick={() => setBrandMenuOpen(value => !value)}><img className="brand-mark-image" src={snineLauncherIcon} alt="SNine" /><ChevronDown size={13} /></button>
-        {brandMenuOpen && <div className="brand-popover" role="menu" aria-label="SNine Launcher">
-          <button className="brand-menu-item" role="menuitem" onClick={() => { setBrandMenuOpen(false); setSettingsOpen(true); }}><SVGRepoIcon src={settingsGearSvg} /><span>Settings</span></button>
-          <button className="brand-menu-item" role="menuitem" onClick={() => { setBrandMenuOpen(false); if (authState.account) setAuthMenuOpen(true); else void beginSignIn(); }}><CircleUserRound size={16} /><span>{authState.account?.username ?? "Minecraft account"}</span><ChevronRight size={14} /></button>
-          <div className="brand-menu-separator" />
-          <button className="brand-menu-item" role="menuitem" onClick={() => { setBrandMenuOpen(false); setSideTab("Downloads"); }}><Download size={16} /><span>Downloads</span></button>
-          {authState.account && <><div className="brand-menu-separator" /><button className="brand-menu-item" role="menuitem" onClick={() => { setBrandMenuOpen(false); void signOut(); }}><CircleUserRound size={16} /><span>Sign out</span></button></>}
-          <div className="brand-menu-separator" />
-          <button className="brand-menu-item" role="menuitem" onClick={() => { setBrandMenuOpen(false); void windowAction("close"); }}><X size={16} /><span>Quit SNine Launcher</span></button>
-        </div>}
-      </div>
-      <div className="history-controls">
-        <button className="chrome-button" aria-label="Back" disabled={historyIndex === 0} onClick={() => moveHistory(-1)}><ArrowLeft size={15} /></button>
-        <button className="chrome-button" aria-label="Forward" disabled={historyIndex >= history.length - 1} onClick={() => moveHistory(1)}><ArrowRight size={15} /></button>
-      </div>
-      <nav className="primary-nav" aria-label="Main navigation">
-        <button className={"primary-tab " + (page === "Library" ? "selected" : "")} onClick={() => navigate("Library")}><LibraryBig size={16} /> Library</button>
-        <button className={"primary-tab " + (page === "Cosmetics" ? "selected" : "")} onClick={() => navigate("Cosmetics")}><Sparkles size={15} /> Cosmetics</button>
-      </nav>
+      <div className="topbar-drag-region" data-tauri-drag-region />
       <button className="command-trigger" aria-label="Open quick actions" onClick={() => { setCommandQuery(""); setCommandPaletteOpen(true); }}><Search size={14} /><span>Quick actions</span><kbd>Ctrl K</kbd></button>
-      <div className="titlebar-drag-region" data-tauri-drag-region onDoubleClick={() => void windowAction("toggleMaximize")} />
+      <button className="header-settings" aria-label="Open launcher settings" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /><span>Settings</span></button>
+      <button className="header-downloads" aria-label={sideTab === "Downloads" ? "Close downloads" : "Open downloads"} aria-pressed={sideTab === "Downloads"} onClick={() => setSideTab(current => current === "Downloads" ? "Friends" : "Downloads")}><Download size={15} /><span>Downloads</span>{activeDownloads.length > 0 && <i>{activeDownloads.length}</i>}</button>
       <div className="account-control-wrap" ref={authRef}>
-        <button className="account-control" aria-haspopup="menu" aria-expanded={authMenuOpen} onClick={() => authState.account ? setAuthMenuOpen(value => !value) : void beginSignIn()}>
+        <button className="account-control" aria-haspopup="menu" aria-expanded={authMenuOpen} onClick={() => setAuthMenuOpen(value => !value)}>
           {authState.account ? <MinecraftHead uuid={authState.account.uuid} name={authState.account.username} className="account-avatar" /> : <CircleUserRound size={16} />}
-          <span>{authState.account?.username ?? (authState.status === "authorizing" ? "Signing in…" : "Sign in")}</span><ChevronDown size={13} />
+          <span>{authState.account?.username ?? "Sign in"}</span><ChevronDown size={13} />
         </button>
         {authMenuOpen && authState.account && !loginPrompt && <div className="account-popover account-switcher" role="menu" aria-label="Minecraft accounts">
           <small className="account-switcher-label">MINECRAFT ACCOUNTS · {authState.accounts.length}</small>
@@ -839,18 +739,17 @@ export function App() {
           <div className="account-menu-separator" /><button className="account-add-button" role="menuitem" disabled={authBusy} onClick={() => void beginSignIn()}><UserPlus size={15} />Add another account</button><button role="menuitem" onClick={() => void signOut()}>Sign out current account</button>
         </div>}
         {authMenuOpen && loginPrompt && <div className="account-popover auth-prompt" role="dialog" aria-label="Microsoft sign-in"><strong>Continue with Microsoft</strong><small>Enter this code at Microsoft to connect your Minecraft account.</small><code className="auth-device-code">{loginPrompt.userCode}</code><a href={loginPrompt.verificationUri} target="_blank" rel="noreferrer"><ExternalLink size={14} /> {loginPrompt.verificationUri}</a><small className="auth-waiting">Waiting for Microsoft authentication…</small>{authError && <small className="auth-error">{authError}</small>}<button className="auth-cancel" onClick={() => { void ipc.authCancelSignIn(); setLoginPrompt(null); setAuthState(current => ({ ...current, status: current.account ? "loggedIn" : "loggedOut" })); }}>Cancel sign-in</button></div>}
-        {authMenuOpen && !loginPrompt && !authState.account && <div className="account-popover auth-prompt" role="status"><strong>{authState.status === "authorizing" ? "Opening Microsoft sign-in…" : "Minecraft account"}</strong>{authState.status === "authorizing" && <small>Preparing secure device sign-in…</small>}{authError && <small className="auth-error">{authError}</small>}</div>}
+        {authMenuOpen && !loginPrompt && !authState.account && <div className="account-popover account-switcher" role="menu" aria-label="Minecraft account"><button className="brand-menu-item" role="menuitem" disabled={authState.status === "authorizing"} onClick={() => void beginSignIn()}><CircleUserRound size={16} /><span>{authState.status === "authorizing" ? "Signing in…" : "Sign in with Microsoft"}</span></button>{authError && <small className="auth-error">{authError}</small>}</div>}
       </div>
-      <div className="window-controls">
+      <div className="window-controls topbar-window-controls">
         <button aria-label="Minimize" title="Minimize" onClick={() => void windowAction("minimize")}><Minus size={14} /></button>
-        <button aria-label={isMaximized ? "Restore" : "Maximize"} title={isMaximized ? "Restore" : "Maximize"} onClick={() => void windowAction("toggleMaximize")}>{isMaximized ? <Copy size={12} /> : <Square size={11} />}</button>
         <button className="close-control" aria-label="Close" title="Close" onClick={() => void windowAction("close")}><X size={15} /></button>
       </div>
     </header>
 
     <div className="workspace">
       <main className="content-panel">
-        {page === "Library" && profileView ? <ProfileDetails profile={profileView} resolvedState={resolvedProfileStates[profileView.id]} installing={installingIds.includes(profileView.id) || profileActionIds.includes(profileView.id)} runtimeStatus={runtimeStatus} manageInfo={manageInfo} onInstall={() => profileView.installed ? void playProfile(profileView) : void installClient(profileView)} onRepair={() => void runProfileMaintenance(profileView, "repair")} onUpdate={() => void runProfileMaintenance(profileView, "update")} onCheckUpdate={() => void checkProfileUpdates(profileView)} onUninstall={() => setUninstallTarget(profileView)} onDelete={() => setDeleteTarget(profileView)} onOpenFolder={() => void ipc.openMinecraftProfileFolder(profileView.id).catch(error => showToast(String(error)))} onRename={name => void renameProfile(profileView, name)} onGroupChanged={groupName => setProfiles(items => items.map(item => item.id === profileView.id ? { ...item, groupName } : item))} onDuplicate={() => void duplicateProfile(profileView)} onChangeIcon={() => setIconPickerTarget({ kind: "profile", id: profileView.id, version: manageInfo?.minecraftVersion ?? profileView.minecraftVersion })} onBack={() => setProfileViewId(null)} /> : page === "Library" ? <>
+        {profileView ? <ProfileDetails profile={profileView} resolvedState={resolvedProfileStates[profileView.id]} installing={installingIds.includes(profileView.id) || profileActionIds.includes(profileView.id)} runtimeStatus={runtimeStatus} manageInfo={manageInfo} onInstall={() => profileView.installed ? void playProfile(profileView) : void installClient(profileView)} onRepair={() => void runProfileMaintenance(profileView, "repair")} onUpdate={() => void runProfileMaintenance(profileView, "update")} onCheckUpdate={() => void checkProfileUpdates(profileView)} onUninstall={() => setUninstallTarget(profileView)} onDelete={() => setDeleteTarget(profileView)} onOpenFolder={() => void ipc.openMinecraftProfileFolder(profileView.id).catch(error => showToast(String(error)))} onRename={name => void renameProfile(profileView, name)} onGroupChanged={groupName => setProfiles(items => items.map(item => item.id === profileView.id ? { ...item, groupName } : item))} onDuplicate={() => void duplicateProfile(profileView)} onChangeIcon={() => setIconPickerTarget({ kind: "profile", id: profileView.id, version: manageInfo?.minecraftVersion ?? profileView.minecraftVersion })} onBack={() => setProfileViewId(null)} /> : <>
           <div className="section-tabs" role="tablist" aria-label="Library categories">
             {(["Clients", "Profiles", "Favorites"] as LibraryTab[]).map(tab => { const count = tab === "Clients" ? profiles.filter(profile => !profile.hidden).length : tab === "Favorites" ? profiles.filter(profile => profile.favorite && !profile.hidden).length : profiles.length; const shortcut = tab === "Clients" ? "1" : tab === "Profiles" ? "2" : "3"; return <button key={tab} role="tab" aria-selected={libraryTab === tab} className={"section-tab " + (libraryTab === tab ? "active" : "")} title={`${tab} · Ctrl+Shift+${shortcut}`} onClick={() => setLibraryTab(tab)}>{tab}<span className="section-tab-count">{count}</span></button>; })}
             <button className="create-profile" onClick={() => void addProfile()}><Plus size={14} /> New profile</button>
@@ -866,7 +765,7 @@ export function App() {
               </div>
               <div className="sort-wrap">
                 <button className="sort-button" aria-haspopup="menu" aria-expanded={sortOpen} onClick={() => { setViewMenuOpen(false); setSortOpen(value => !value); }}><Settings2 size={14} /><span>Filters &amp; sort{activeLibraryFilterCount ? ` · ${activeLibraryFilterCount}` : ""}</span><ChevronDown size={13} /></button>
-                {sortOpen && <div className="sort-menu"><span className="sort-menu-heading">SORT PROFILES</span>{["Recently added", "Recently played", "Favorites first", "Installed first", "Minecraft version", "Loader", "Group", "Java runtime", "Name A–Z"].map(label => <button key={label} onClick={() => { setSortLabel(label); setSortOpen(false); }}>{label}{sortLabel === label && <Check size={13} />}</button>)}
+                {sortOpen && <div className="sort-menu"><span className="sort-menu-heading">SORT PROFILES</span>{["Recently added", "Favorites first", "Installed first", "Minecraft version", "Loader", "Group", "Java runtime", "Name A–Z"].map(label => <button key={label} onClick={() => { setSortLabel(label); setSortOpen(false); }}>{label}{sortLabel === label && <Check size={13} />}</button>)}
                   <span className="sort-menu-heading sort-menu-heading-spaced">FILTER BY GROUP</span>
                   <FilterMenuOption label="All groups" count={profiles.length} active={groupFilter === "all"} onClick={() => setGroupFilter("all")} />
                   <FilterMenuOption label="Ungrouped" count={profiles.filter(profile => !(profile.groupName ?? "").trim()).length} active={groupFilter === "__ungrouped"} onClick={() => setGroupFilter("__ungrouped")} />
@@ -887,31 +786,23 @@ export function App() {
               <div className={"profile-grid " + (view === "list" ? "list-view" : "")}>
                 {visibleProfiles.map(profile => <ProfileCard key={profile.id} profile={profile} listView={view === "list"} chosen={profile.id === selected?.id} favorite={profile.favorite} hidden={profile.hidden} installing={installingIds.includes(profile.id) || profileActionIds.includes(profile.id)} playing={playingIds.includes(profile.id)} runtimeStatus={runtimeStatus} resolvedState={resolvedProfileStates[profile.id]} onOpen={item => void selectProfile(item)} onToggleFavorite={toggleFavorite} onToggleHidden={toggleHidden} onInstall={item => void installClient(item)} onPlay={item => void playProfile(item)} onRepair={item => void runProfileMaintenance(item, "repair")} onUpdate={item => void runProfileMaintenance(item, "update")} onCheckUpdate={item => void checkProfileUpdates(item)} onUninstall={item => setUninstallTarget(item)} onDuplicate={item => void duplicateProfile(item)} onOpenFolder={item => void ipc.openMinecraftProfileFolder(item.id).catch(error => showToast(String(error)))} onSetSelected={item => void selectProfile(item, false).catch(error => showToast(String(error)))} onFilterGroup={group => { setGroupFilter(group || "__ungrouped"); setLibraryTab("Profiles"); setProfileViewId(null); }} onCopyName={item => void navigator.clipboard.writeText(item.name).then(() => showToast(`Copied ${item.name}.`)).catch(() => showToast("Clipboard access is unavailable."))} />)}
               </div>}
-        </> : <>
-          <CosmeticsPage account={authState.account} onSignIn={() => void beginSignIn()} />
         </>}
       </main>
 
       <aside className="side-panel">
         {sideTab === "Downloads" ? <>
-          <div className="side-tabs social-tabs" role="tablist" aria-label="Social"><button role="tab" aria-selected="false" onClick={() => setSideTab("Friends")}><Users size={16} /> Friends</button><button role="tab" aria-selected="false" onClick={() => setSideTab("Chats")}><MessageSquareText size={15} /> Chats</button></div>
           <div className="side-content"><div className="side-heading download-heading"><div><strong>Download queue</strong><span className="item-count">{activeDownloads.length}</span></div><div className="download-bulk-actions"><button type="button" disabled={activeDownloads.length === 0 || downloadBatchAction !== null} aria-label="Cancel all active downloads" title="Cancel all active downloads" onClick={() => void cancelAllDownloads()}>{downloadBatchAction === "cancel" ? <LoaderCircle size={13} className="account-spinner" /> : <X size={13} />}</button><button type="button" disabled={failedDownloads.length === 0 || downloadBatchAction !== null} aria-label="Retry all failed downloads" title="Retry all failed downloads" onClick={() => void retryAllFailedDownloads()}>{downloadBatchAction === "retry" ? <LoaderCircle size={13} className="account-spinner" /> : <RotateCcw size={13} />}</button><button type="button" disabled={completedDownloadCount === 0} aria-label="Clear completed downloads" title="Clear completed downloads" onClick={() => setDownloads(items => items.filter(item => item.state === "queued" || item.state === "downloading" || item.state === "failed"))}><Trash2 size={13} /></button></div></div>{downloads.length === 0 ? <div className="activity-empty"><div className="activity-symbol"><Download size={15} /></div><strong>Queue is clear</strong><p>Profile downloads will show transfer progress and status here.</p></div> : <div className="download-list">{downloads.slice(-8).reverse().map(item => { const percent = item.totalBytes ? Math.min(100, item.bytesReceived / item.totalBytes * 100) : 0; const active = item.state === "queued" || item.state === "downloading"; return <article className="download-row" key={item.id}><div className="download-row-top"><strong title={item.fileName}>{item.fileName}</strong><button className="download-cancel" disabled={!active && item.state !== "failed"} aria-label={active ? `Cancel ${item.fileName}` : item.state === "failed" ? `Retry ${item.fileName}` : `${item.state}`} onClick={() => item.state === "failed" ? void ipc.retryDownload(item.id).then(() => showToast("Retry queued.")).catch(error => showToast(String(error))) : active ? void ipc.cancelDownload(item.id) : undefined}>{item.state === "failed" ? <RotateCcw size={13} /> : active ? <X size={13} /> : <Check size={13} />}</button></div><small>{item.state === "downloading" ? `${formatBytes(item.bytesReceived)}${item.totalBytes ? ` / ${formatBytes(item.totalBytes)}` : ""} · ${formatBytes(item.bytesPerSecond)}/s${item.etaSeconds ? ` · ${formatDuration(item.etaSeconds)}` : ""}` : item.state === "failed" ? item.error ?? "Download failed" : item.state}</small><div className="download-progress-track"><i style={{ width: `${percent}%` }} /></div></article>; })}</div>}<div className="download-policy"><span>TRANSFER SETTINGS</span><strong>Up to 4 simultaneous files</strong><small>Resumes partial files when the server supports byte ranges.</small></div></div>
-        </> : <SocialPanel tab={sideTab} onTabChange={setSideTab} account={authState.account} activity={activity} profiles={profiles} onSelectProfile={profile => void selectProfile(profile)} onSignIn={() => void beginSignIn()} />}
+        </> : <Suspense fallback={<div className="social-panel-placeholder" aria-hidden="true"><i /><i /><i /></div>}><SocialPanel account={authState.account} onSignIn={() => void beginSignIn()} /></Suspense>}
       </aside>
     </div>
 
     <footer className="bottom-bar">
-      <div className="recent-wrapper" ref={recentRef}>
-      <button className="recent-button" aria-haspopup="menu" aria-expanded={recentMenuOpen} onClick={() => setRecentMenuOpen(value => !value)}><History size={16} /><span><strong>{selected?.name ?? "Recent profiles"}</strong></span><ChevronDown size={14} /></button>
-        {recentMenuOpen && <div className="recent-popover" role="menu" aria-label="Recent profiles"><strong>Recent profiles</strong>{recentIds.map(id => profiles.find(profile => profile.id === id)).filter((profile): profile is Profile => !!profile).slice(0, 6).map(profile => <button type="button" role="menuitem" key={profile.id} onClick={() => { setRecentMenuOpen(false); void selectProfile(profile); }}><ProfileCover profile={profile} className="recent-thumb" /><span><b>{profile.name}</b><small>{profile.installed ? "Installed" : "Not installed"}</small></span>{profile.id === selected?.id && <Check size={14} />}</button>)}</div>}
-      </div>
-      <button className={"bottom-downloads " + (sideTab === "Downloads" ? "active" : "")} onClick={() => setSideTab("Downloads")} aria-label="Open downloads">
+      {activeDownloads.length > 0 && <button className={"bottom-downloads " + (sideTab === "Downloads" ? "active" : "")} onClick={() => setSideTab(current => current === "Downloads" ? "Friends" : "Downloads")} aria-label={sideTab === "Downloads" ? "Close downloads" : "Open downloads"} aria-pressed={sideTab === "Downloads"}>
         <SVGRepoIcon src={downloadArrowSvg} />
         <span className="bottom-download-copy"><strong>{activeDownloads.some(item => item.state === "downloading") ? "Downloading" : activeDownloads.length ? "Queued" : "Downloads"}</strong><span className="bottom-download-track"><i style={{ width: `${downloadProgress}%` }} /></span></span>
         <span className="bottom-download-percent">{Math.round(downloadProgress)}%</span>
-      </button>
+      </button>}
       <div className="bottom-spacer" /><span className="version-label">{LAUNCHER_VERSION} <i>(Windows)</i></span>
-      <button className="feedback-button" onClick={() => setFeedbackOpen(true)}><MessageSquareText size={13} /> Feedback</button>
     </footer>
     {commandPaletteOpen && <div className="command-palette-scrim" onClick={() => setCommandPaletteOpen(false)}><section className="command-palette" role="dialog" aria-modal="true" aria-label="Quick actions" onClick={event => event.stopPropagation()}>
       <div className="command-palette-search"><Search size={18} /><input ref={commandInputRef} value={commandQuery} onChange={event => { setCommandQuery(event.target.value); setCommandSelection(0); }} onKeyDown={event => {
@@ -934,14 +825,13 @@ export function App() {
         <div className="settings-nav-note"><i /><span><strong>Saved automatically</strong><small>Your choices stay on this device.</small></span></div>
       </nav><main className="settings-page-content">
         {settingsTab === "Appearance" && <section className="settings-section"><div className="settings-page-heading"><small>LOOK & FEEL</small><h3>Shape your launcher</h3><p>Choose how soft or sharp the launcher surfaces feel. This applies instantly across the whole app.</p></div><article className="settings-card corner-card"><div className="settings-card-heading"><span><strong>Rounded corners</strong><small>Panels, cards and controls</small></span><span className="live-setting-badge"><i /> LIVE</span></div><div className="corner-style-options" role="radiogroup" aria-label="Rounded corners">{([{ id: "square", label: "Square", detail: "Crisp edges" }, { id: "balanced", label: "Subtle", detail: "A little softness" }, { id: "rounded", label: "Rounded", detail: "Smooth corners" }] as const).map(option => <button key={option.id} role="radio" aria-checked={cornerStyle === option.id} className={cornerStyle === option.id ? "selected" : ""} onClick={() => chooseCornerStyle(option.id)}><i className={"corner-preview " + option.id} /><strong>{option.label}</strong><small>{option.detail}</small></button>)}</div></article><div className="settings-tip"><Sparkles size={15} /><span><strong>Made to fit your style</strong><small>Preview each corner setting instantly and keep the one that feels right.</small></span></div></section>}
-        {settingsTab === "Minecraft" && <section className="settings-section"><div className="settings-page-heading"><small>GAME CONFIGURATION</small><h3>Minecraft</h3><p>Set the memory and window behavior used when you launch a profile.</p></div><article className="settings-card"><div className="settings-card-heading"><span><strong>Memory allocation</strong><small>Maximum Java heap on the next launch</small></span><span className="settings-inline-control"><input aria-label="Minecraft memory" type="number" min={2048} max={32768} step={512} value={minecraftMemoryMb} onChange={event => setMinecraftMemoryMb(Number(event.target.value))} onBlur={() => { if (Number.isInteger(minecraftMemoryMb) && minecraftMemoryMb >= 2048 && minecraftMemoryMb <= 32768 && minecraftMemoryMb % 512 === 0) void saveMinecraftMemory(); }} /><small>MB</small></span></div><div className="settings-card-divider" /><div className="settings-card-heading"><span><strong>Game window</strong><small>Applied the next time Minecraft starts</small></span><label className="settings-toggle"><span>Fullscreen</span><input type="checkbox" checked={windowSettings.fullscreen} onChange={event => setWindowSettings(value => ({ ...value, fullscreen: event.target.checked }))} /></label></div><div className="window-dimension-grid"><label>Width<input type="number" min={640} max={7680} value={windowSettings.width} disabled={windowSettings.fullscreen} onChange={event => setWindowSettings(value => ({ ...value, width: Number(event.target.value) }))} /></label><label>Height<input type="number" min={480} max={4320} value={windowSettings.height} disabled={windowSettings.fullscreen} onChange={event => setWindowSettings(value => ({ ...value, height: Number(event.target.value) }))} /></label></div><div className="window-presets">{[[1280,720,"Default"],[1280,720,"720p"],[1920,1080,"1080p"],[2560,1440,"1440p"],[3840,2160,"4K"]].map(([width,height,label]) => <button key={label} onClick={() => setWindowSettings(value => ({ ...value, width: Number(width), height: Number(height), fullscreen: false }))}>{label}</button>)}</div><button className="settings-save-button" onClick={() => void saveWindowSettings()}>Save window settings</button></article><article className="settings-card settings-check-row"><span><strong>Minimize when the game starts</strong><small>Only minimize after Minecraft has launched successfully.</small></span><input type="checkbox" checked={minimizeOnGameStart} onChange={event => void saveMinimizeOnGameStart(event.target.checked)} /></article><div className="settings-tip"><Gamepad2 size={15} /><span><strong>Automatic Java selection</strong><small>The launcher detects the Java version required by each Minecraft release and supports managed Java 21 and 25 runtimes.</small></span></div></section>}
+        {settingsTab === "Minecraft" && <section className="settings-section"><div className="settings-page-heading"><small>GAME CONFIGURATION</small><h3>Minecraft</h3><p>Set the memory and window behavior used when you launch a profile.</p></div><article className="settings-card"><div className="settings-card-heading"><span><strong>Memory allocation</strong><small>Maximum Java heap on the next launch</small></span><span className="settings-inline-control"><input aria-label="Minecraft memory" type="number" min={2048} max={32768} step={512} value={minecraftMemoryMb} onChange={event => setMinecraftMemoryMb(Number(event.target.value))} onBlur={() => { if (Number.isInteger(minecraftMemoryMb) && minecraftMemoryMb >= 2048 && minecraftMemoryMb <= 32768 && minecraftMemoryMb % 512 === 0) void saveMinecraftMemory(); }} /><small>MB</small></span></div><div className="settings-card-divider" /><div className="settings-card-heading"><span><strong>Game window</strong><small>Applied the next time Minecraft starts</small></span><label className="settings-toggle"><span>Fullscreen</span><input type="checkbox" checked={windowSettings.fullscreen} onChange={event => setWindowSettings(value => ({ ...value, fullscreen: event.target.checked }))} /></label></div><div className="window-dimension-grid"><label>Width<input type="number" min={640} max={7680} value={windowSettings.width} disabled={windowSettings.fullscreen} onChange={event => setWindowSettings(value => ({ ...value, width: Number(event.target.value) }))} /></label><label>Height<input type="number" min={480} max={4320} value={windowSettings.height} disabled={windowSettings.fullscreen} onChange={event => setWindowSettings(value => ({ ...value, height: Number(event.target.value) }))} /></label></div><div className="window-presets">{[[1280,720,"Default"],[1280,720,"720p"],[1920,1080,"1080p"],[2560,1440,"1440p"],[3840,2160,"4K"]].map(([width,height,label]) => <button key={label} onClick={() => setWindowSettings(value => ({ ...value, width: Number(width), height: Number(height), fullscreen: false }))}>{label}</button>)}</div><button className="settings-save-button" onClick={() => void saveWindowSettings()}>Save window settings</button></article><div className="settings-tip"><Gamepad2 size={15} /><span><strong>Automatic Java selection</strong><small>The launcher detects the Java version required by each Minecraft release and supports managed Java 21 and 25 runtimes.</small></span></div></section>}
         {settingsTab === "Downloads" && <section className="settings-section"><div className="settings-page-heading"><small>TRANSFER PREFERENCES</small><h3>Downloads</h3><p>Control how many files the launcher transfers at the same time.</p></div><article className="settings-card"><div className="settings-card-heading"><span><strong>Download concurrency</strong><small>Maximum simultaneous transfers</small></span><span className="settings-inline-control"><input aria-label="Download concurrency" type="number" min={1} max={16} step={1} value={downloadConcurrency} onChange={event => setDownloadConcurrency(Number(event.target.value))} onBlur={() => { if (Number.isInteger(downloadConcurrency) && downloadConcurrency >= 1 && downloadConcurrency <= 16) void saveDownloadConcurrency(downloadConcurrency); }} /><small>jobs</small></span></div><p className="settings-card-note">More jobs can speed up large installs, but use more of your connection. Choose between 1 and 16.</p></article></section>}
         {settingsTab === "Storage" && <section className="settings-section"><div className="settings-page-heading"><small>LOCAL FILES</small><h3>Storage</h3><p>See how much space the launcher and Minecraft content currently use.</p></div><article className="settings-card storage-card"><div className="settings-card-heading"><span><strong>Disk usage</strong><small>Launcher-managed files on this device</small></span><button className="settings-refresh-button" onClick={() => void ipc.getStorageInfo().then(setStorageInfo).catch(error => showToast(String(error)))}><RotateCcw size={14} /> Refresh</button></div><div className="storage-summary"><span>Profile instances <b>{storageInfo ? formatBytes(storageInfo.profileInstancesBytes) : "Calculating…"}</b></span><span>Shared libraries <b>{storageInfo ? formatBytes(storageInfo.librariesBytes) : "Calculating…"}</b></span><span>Minecraft assets <b>{storageInfo ? formatBytes(storageInfo.assetsBytes) : "Calculating…"}</b></span><span>Managed runtimes <b>{storageInfo ? formatBytes(storageInfo.runtimesBytes) : "Calculating…"}</b></span><span>Download cache <b>{storageInfo ? formatBytes(storageInfo.downloadCacheBytes) : "Calculating…"}</b></span></div></article></section>}
       </main></div><footer className="settings-window-footer"><span><i /> {LAUNCHER_VERSION} · WINDOWS</span><button onClick={() => setSettingsOpen(false)}>Done</button></footer>
     </section></div>}
     {launcherUpdate && <div className="modal-scrim" onClick={() => { if (!launcherUpdateBusy) dismissLauncherUpdate(); }}><section className="settings-popover feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="launcher-update-heading" onClick={event => event.stopPropagation()}><div><div><small>SNINE LAUNCHER · UPDATE</small><h2 id="launcher-update-heading">Version {launcherUpdate.version} is ready</h2></div><button className="subtle-icon" aria-label="Close update prompt" disabled={launcherUpdateBusy} onClick={dismissLauncherUpdate}><X size={16} /></button></div><p>{launcherUpdate.body || "A signed launcher update is available. Install it now?"}</p>{launcherUpdateProgress && <p role="status">{launcherUpdateProgress}</p>}<div className="uninstall-actions"><button className="secondary-action" disabled={launcherUpdateBusy} onClick={dismissLauncherUpdate}>Later</button><button className="compact-play" disabled={launcherUpdateBusy} onClick={() => void installLauncherUpdate()}>{launcherUpdateBusy ? launcherUpdateProgress || "Updating…" : "Update and restart"}</button></div></section></div>}
-    {feedbackOpen && <div className="modal-scrim" onClick={() => setFeedbackOpen(false)}><section className="settings-popover feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="feedback-heading" onClick={event => event.stopPropagation()}><div><div><small>SNINE LAUNCHER · {LAUNCHER_VERSION}</small><h2 id="feedback-heading">Give feedback</h2></div><button className="subtle-icon" aria-label="Close feedback" onClick={() => setFeedbackOpen(false)}><X size={16} /></button></div><p>Write your feedback, then copy it to share with the SNine team.</p><textarea aria-label="Feedback" value={feedbackText} onChange={event => setFeedbackText(event.target.value)} placeholder="What should we improve?" rows={5} /><div className="uninstall-actions"><button className="secondary-action" onClick={() => setFeedbackOpen(false)}>Cancel</button><button className="compact-play" disabled={!feedbackText.trim()} onClick={() => { void navigator.clipboard.writeText(`[SNine Launcher ${LAUNCHER_VERSION}]\n${feedbackText.trim()}`).then(() => { setFeedbackOpen(false); setFeedbackText(""); showToast("Feedback copied to clipboard."); }).catch(() => showToast("Clipboard access is unavailable.")); }}>Copy feedback</button></div></section></div>}
-    {createProfileOpen && <ProfileCreationForm
+    {createProfileOpen && <Suspense fallback={<div className="lazy-panel-placeholder" role="status">Preparing profile setup…</div>}><ProfileCreationForm
       name={newProfileName} onNameChange={setNewProfileName}
       minecraftVersion={newMinecraftVersion} onMinecraftVersionChange={setNewMinecraftVersion}
       versions={minecraftVersions} showSnapshots={showSnapshots} onShowSnapshotsChange={setShowSnapshots}
@@ -951,11 +841,11 @@ export function App() {
       includeSnineClient={newSnineEnabled} onIncludeSnineClientChange={setNewSnineEnabled}
       memory={newProfileMemoryMb} onMemoryChange={setNewProfileMemoryMb}
       iconId={newProfileIconId} iconPreview={newProfileIconPreview} onChooseIcon={() => setIconPickerTarget({ kind: "create", version: newMinecraftVersion })}
-      onCreate={() => void createProfile()} onCancel={() => setCreateProfileOpen(false)} />}
-    <BlockIconPicker open={!!iconPickerTarget} minecraftVersion={iconPickerTarget?.version ?? ""}
+      onCreate={() => void createProfile()} onCancel={() => setCreateProfileOpen(false)} /></Suspense>}
+    {iconPickerTarget && <Suspense fallback={<div className="lazy-panel-placeholder" role="status">Loading icons…</div>}><BlockIconPicker open minecraftVersion={iconPickerTarget.version}
       selectedIconId={iconPickerTarget?.kind === "create" ? newProfileIconId : profiles.find(profile => profile.id === (iconPickerTarget?.kind === "profile" ? iconPickerTarget.id : ""))?.iconId ?? null}
       selectedPreview={iconPickerTarget?.kind === "create" ? newProfileIconPreview : null}
-      onSelect={entry => void chooseProfileIcon(entry)} onClose={() => setIconPickerTarget(null)} />
+      onSelect={entry => void chooseProfileIcon(entry)} onClose={() => setIconPickerTarget(null)} /></Suspense>}
     {uninstallTarget && <div className="modal-scrim" onClick={() => setUninstallTarget(null)}><section className="settings-popover uninstall-dialog" role="alertdialog" aria-modal="true" aria-labelledby="uninstall-heading" onClick={event => event.stopPropagation()}><div><div><small>PROFILE MANAGEMENT</small><h2 id="uninstall-heading">Uninstall {uninstallTarget.name}?</h2></div><button className="subtle-icon" aria-label="Close confirmation" onClick={() => setUninstallTarget(null)}><X size={16} /></button></div><p>This removes the managed client and profile metadata. Saves, screenshots, configurations, user mods, shared Minecraft files, and Java runtimes are kept.</p><div className="uninstall-actions"><button className="secondary-action" onClick={() => setUninstallTarget(null)}>Cancel</button><button className="destructive-action" onClick={() => void performUninstall()}>Uninstall</button></div></section></div>}
     {deleteTarget && <div className="modal-scrim" onClick={() => setDeleteTarget(null)}><section className="settings-popover uninstall-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-profile-heading" onClick={event => event.stopPropagation()}><div><div><small>PROFILE MANAGEMENT</small><h2 id="delete-profile-heading">Delete {deleteTarget.name}?</h2></div><button className="subtle-icon" aria-label="Close confirmation" onClick={() => setDeleteTarget(null)}><X size={16} /></button></div><p>This removes the profile entry only. Installed profiles must be uninstalled first; the primary SNineClient profile is protected.</p><div className="uninstall-actions"><button className="secondary-action" onClick={() => setDeleteTarget(null)}>Cancel</button><button className="destructive-action" onClick={() => void deleteProfile()}>Delete profile</button></div></section></div>}
     {toast && <div role="status" className="toast">{toast}</div>}
@@ -1019,10 +909,10 @@ function ProfileDetails({ profile, resolvedState, installing, runtimeStatus, man
     <div className="detail-hero"><ProfileCover profile={profile} className="detail-cover" /><div className="detail-identity"><span className="detail-eyebrow">PROFILE</span>{editingName ? <form className="profile-rename-form" onSubmit={event => { event.preventDefault(); onRename(nameDraft); setEditingName(false); }}><input autoFocus maxLength={48} aria-label="Profile name" value={nameDraft} onChange={event => setNameDraft(event.target.value)} /><button className="subtle-icon" aria-label="Save profile name" disabled={!nameDraft.trim()}><Check size={15} /></button><button type="button" className="subtle-icon" aria-label="Cancel rename" onClick={() => { setNameDraft(profile.name); setEditingName(false); }}><X size={15} /></button></form> : <div className="profile-title-edit"><h1>{profile.name}</h1><button className="subtle-icon" aria-label="Rename profile" title="Rename profile" onClick={() => setEditingName(true)}><Pencil size={14} /></button></div>}<p>Minecraft {profile.minecraftVersion} · {loaderLabel} · SNineClient {profile.snineclientEnabled ? "On" : "Off"}</p><div className="detail-hero-actions"><button type="button" className="secondary-action" onClick={onChangeIcon}>Change icon</button><button className="compact-play" disabled={actionDisabled || installing} title={profile.clientReady && runtimeReady && !profile.installed ? "Install Minecraft and Fabric before playing." : undefined} onClick={resolvedState === "RepairRequired" ? onRepair : resolvedState === "UpdateAvailable" ? onUpdate : onInstall}>{profile.installed && resolvedState !== "RepairRequired" && resolvedState !== "UpdateAvailable" ? <Gamepad2 size={15} /> : <Download size={15} />}{actionLabel}</button></div></div><aside className="detail-hero-status"><span className={`detail-status-pill ${readinessTone}`}><i />{readiness}</span><strong>{profile.installed ? "Installation" : "Profile setup"}</strong><small>Minecraft {profile.minecraftVersion}</small><small>{loaderLabel}{profile.snineclientEnabled ? " · SNineClient" : ""}</small><small>{runtimeStatus ? `Java ${runtimeStatus.requiredMajor}${runtimeReady ? " ready" : " needed"}` : "Checking Java runtime…"}</small></aside></div>
     <div className="profile-manage-tabs" role="tablist" aria-label="Profile management">{(["Overview", "Mods", "Resource Packs", "Game content", "Settings"] as const).map(tab => <button key={tab} role="tab" aria-selected={manageTab === tab} className={manageTab === tab ? "active" : ""} onClick={() => { if (tab === "Game content") { setContentInitialSection("shaderpacks"); setContentMountId(value => value + 1); } setManageTab(tab); }}>{tab}</button>)}</div>
     {manageTab === "Overview" && <div className="detail-overview"><div className="detail-section-heading"><div><span>PROFILE</span><h2>Overview</h2></div><div className="manage-action-row"><button className="secondary-action" disabled={backupBusy || (!profile.installed && !profile.clientReady)} onClick={() => void createBackup()}><Download size={14} />{backupBusy ? "Creating backup…" : "Create backup"}</button><button className="secondary-action" disabled={backupBusy || (!profile.installed && !profile.clientReady)} onClick={() => void restoreBackup()}><History size={14} />Restore backup</button><button className="secondary-action" onClick={onDuplicate}><Copy size={14} /> Duplicate</button></div></div><div className="detail-info-grid"><div><span>Status</span><strong><i className={profile.clientReady ? "status-dot online" : "status-dot"} />{profile.clientReady ? runtimeReady ? "Client and Java ready · Minecraft/loader setup required" : `Client installed · Java ${requiredJavaMajor(profile)} required` : "Ready to install"}</strong></div><div><span>Client version</span><strong>{manageInfo?.clientVersion ?? profile.clientVersion}</strong></div><div><span>Minecraft version</span><strong>{manageInfo?.minecraftVersion ?? profile.minecraftVersion}</strong></div><div><span>Java runtime</span><strong>{manageInfo?.runtime ?? (runtimeStatus?.compatible ? `${runtimeStatus.compatible.detail} ready${runtimeStatus.managed ? " · managed" : ""}` : runtimeStatus?.candidates.length ? `Java ${runtimeStatus.candidates[0].major ?? "?"} found · Java ${runtimeStatus.requiredMajor} required` : "Java runtime not found")}</strong></div></div>{backupMessage && <p className="profile-mod-note" role="status">{backupMessage}</p>}</div>}
-    {manageTab === "Mods" && <ProfileModsPage key={profile.id} profileId={profile.id} minecraftVersion={manageInfo?.minecraftVersion ?? profile.minecraftVersion} loaderType={profile.loaderType} installed={profile.installed} />}
-    {manageTab === "Resource Packs" && <ProfileResourcePacksPage key={profile.id} profileId={profile.id} minecraftVersion={manageInfo?.minecraftVersion ?? profile.minecraftVersion} installed={profile.installed} />}
+    {manageTab === "Mods" && <Suspense fallback={<div className="lazy-panel-placeholder" role="status">Loading mods…</div>}><ProfileModsPage key={profile.id} profileId={profile.id} minecraftVersion={manageInfo?.minecraftVersion ?? profile.minecraftVersion} loaderType={profile.loaderType} installed={profile.installed} /></Suspense>}
+    {manageTab === "Resource Packs" && <Suspense fallback={<div className="lazy-panel-placeholder" role="status">Loading resource packs…</div>}><ProfileResourcePacksPage key={profile.id} profileId={profile.id} minecraftVersion={manageInfo?.minecraftVersion ?? profile.minecraftVersion} installed={profile.installed} /></Suspense>}
     {manageTab === "Settings" && <ProfileGroupEditor profileId={profile.id} groupName={profileGroup} onChange={setProfileGroup} onSaved={onGroupChanged} />}
-    {manageTab === "Game content" && <ProfileContentPage key={`${profile.id}-${contentMountId}`} profileId={profile.id} installed={profile.installed} running={resolvedState === "Running"} initialSection={contentInitialSection} />}
+    {manageTab === "Game content" && <Suspense fallback={<div className="lazy-panel-placeholder" role="status">Loading game content…</div>}><ProfileContentPage key={`${profile.id}-${contentMountId}`} profileId={profile.id} installed={profile.installed} running={resolvedState === "Running"} initialSection={contentInitialSection} /></Suspense>}
     {manageTab === "Settings" && <div className="detail-overview"><div className="detail-section-heading"><div><span>PROFILE</span><h2>Settings</h2></div></div><div className="manage-info-row"><span>Minecraft version</span><strong>{manageInfo?.minecraftVersion ?? profile.minecraftVersion}</strong></div><div className="manage-info-row"><span>Loader</span><strong>{profile.loaderType === "fabric" || profile.loaderType === "quilt" ? `${profile.loaderType === "quilt" ? "Quilt" : "Fabric"} ${manageInfo?.loaderVersion ?? "managed by launcher"}` : profile.loaderType}</strong></div><div className="manage-info-row"><span>SNineClient</span><strong>{profile.snineclientEnabled ? profile.clientVersion : "Not included"}</strong></div><label className="profile-memory-setting"><span>Profile memory limit <small>{profileMemoryInherited ? "Using global default" : "Applied on next launch"}</small></span><span><input disabled={!isTauri()} type="number" min={2048} max={32768} step={512} value={profileMemoryInput} placeholder="Global" onChange={event => setProfileMemoryInput(event.target.value)} onBlur={() => { const value = Number(profileMemoryInput); if (Number.isInteger(value) && value >= 2048 && value <= 32768 && value % 512 === 0 && isTauri()) void ipc.setProfileMemory(profile.id, value).then(() => { setProfileMemoryInherited(false); setSettingsMessage("Memory setting saved."); }).catch(error => setSettingsMessage(String(error))); }} /> MB</span></label><button className="secondary-action" disabled={!isTauri()} onClick={() => void ipc.setProfileMemory(profile.id, null).then(() => { setProfileMemoryInput(""); setProfileMemoryInherited(true); setSettingsMessage("Using the launcher memory default."); }).catch(error => setSettingsMessage(String(error)))}>Use global memory default</button>{settingsMessage && <p className="profile-mod-note" role="status">{settingsMessage}</p>}<p>Version and loader changes stay unavailable until a compatible install provider is active.</p><div className="manage-action-row"><button className="secondary-action" onClick={onOpenFolder}><ExternalLink size={14} /> Open profile folder</button>{!profile.installed && !profile.clientReady && profile.id !== "snineclient-default" && <button className="destructive-action" onClick={onDelete}><X size={14} /> Delete profile</button>}</div></div>}
     {profile.installed && <div className="detail-overview manage-actions"><div className="detail-section-heading"><div><span>MANAGED INSTALL</span><h2>Manage</h2></div></div><div className="manage-info-row"><span>{profile.loaderType === "fabric" ? "Fabric Loader" : profile.loaderType === "quilt" ? "Quilt Loader" : "Loader"}</span><strong>{manageInfo?.loaderVersion ?? "Reading install metadata…"}</strong></div><div className="manage-info-row"><span>Profile storage</span><strong>{manageInfo ? formatBytes(manageInfo.storageBytes) : "Calculating…"}</strong></div><div className="manage-info-row"><span>Location</span><strong className="manage-location" title={manageInfo?.directory}>{manageInfo?.directory ?? "Managed profile folder"}</strong></div><div className="manage-action-row"><button className="secondary-action" onClick={onOpenFolder}><ExternalLink size={14} /> Open folder</button><button className="secondary-action" onClick={() => { setContentInitialSection("logs"); setContentMountId(value => value + 1); setManageTab("Game content"); }}><FileText size={14} /> View game logs</button><button className="secondary-action" onClick={onCheckUpdate}><Download size={14} /> Check updates</button><button className="secondary-action" disabled={installing} onClick={onRepair}><Settings2 size={14} /> Verify / Repair</button><button className="destructive-action" disabled={installing} onClick={onUninstall}><X size={14} /> Uninstall</button></div></div>}
   </section>;
@@ -1056,18 +946,6 @@ function formatDuration(seconds: number): string {
 }
 
 
-function readIds(key: string): string[] {
-  try {
-    const value = window.localStorage.getItem(key);
-    const parsed: unknown = value ? JSON.parse(value) : [];
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
-  } catch { return []; }
-}
-
-function saveIds(key: string, ids: string[]): void {
-  try { window.localStorage.setItem(key, JSON.stringify(ids)); } catch { /* local persistence is best-effort */ }
-}
-
 function readLibraryPreferences(): LibraryPreferences {
   const defaults: LibraryPreferences = { tab: "Clients", view: "list", sort: "Recently added", installedOnly: false, groupFilter: "all", loaderFilter: "all", statusFilter: "all", javaFilter: "all", clientFilter: "all" };
   try {
@@ -1077,7 +955,7 @@ function readLibraryPreferences(): LibraryPreferences {
     return {
       tab: value.tab === "Profiles" || value.tab === "Favorites" ? value.tab : "Clients",
       view: value.view === "grid" ? "grid" : "list",
-      sort: ["Recently added", "Recently played", "Favorites first", "Installed first", "Minecraft version", "Loader", "Group", "Java runtime", "Name A–Z"].includes(value.sort ?? "") ? value.sort! : defaults.sort,
+      sort: ["Recently added", "Favorites first", "Installed first", "Minecraft version", "Loader", "Group", "Java runtime", "Name A–Z"].includes(value.sort ?? "") ? value.sort! : defaults.sort,
       installedOnly: value.installedOnly === true,
       groupFilter: typeof value.groupFilter === "string" ? value.groupFilter : defaults.groupFilter,
       loaderFilter: ["all", "vanilla", "fabric", "quilt", "forge", "neoforge"].includes(value.loaderFilter ?? "") ? value.loaderFilter! : defaults.loaderFilter,
