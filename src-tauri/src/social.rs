@@ -5,10 +5,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use zeroize::{Zeroize, Zeroizing};
 
-const API_BASE: &str = "https://api.s9lab.site/api/v1";
+const API_BASE: &str = "https://snc.silasnet.win/api/v1";
 const SESSION_JOIN_URL: &str = "https://sessionserver.mojang.com/session/minecraft/join";
 const SESSION_HEADER: &str = "X-SNine-Session";
-const CLIENT_VERSION: &str = "1.1.5";
+const CLIENT_VERSION: &str = "1.1.6";
 
 #[derive(Clone)]
 struct BackendSession {

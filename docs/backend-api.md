@@ -6,8 +6,8 @@ There is no SNine backend client or production manifest API in the new source tr
 
 ## Legacy contracts observed read-only
 
-- SNine API origin in legacy `src-tauri/resources/backend-endpoints.json`: `https://api.s9lab.site/api/v1`.
-- SNine websocket origin in the same file: `wss://ws.s9lab.site`.
+- SNine API origin in legacy `src-tauri/resources/backend-endpoints.json`: `https://snc.silasnet.win/api/v1`.
+- SNine websocket origin in the same file: `wss://snc-ws.silasnet.win`.
 - Legacy source embeds a backend certificate and uses a session exchange after Minecraft authentication. The certificate and authentication behavior must be reviewed against current server operations before any new client is implemented.
 - Microsoft OAuth/Xbox/Minecraft Services flows use their standard HTTPS endpoints in legacy `auth/microsoft.rs`.
 - Mojang version metadata, Fabric metadata/Maven, NeoForged Maven, and Modrinth API/CDN are external provider contracts, not SNine backend APIs.

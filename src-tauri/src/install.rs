@@ -19,8 +19,8 @@ const CLIENT_RELEASES_API: &str =
     "https://api.github.com/repos/silasnetwin/SNineLauncher/releases?per_page=100";
 const CLIENT_RELEASE_PREFIX: &str = "client-v";
 const MAX_CLIENT_BYTES: u64 = 256 * 1024 * 1024;
-const SNINE_26_1_2_JAR: &[u8] = include_bytes!("../resources/snineclient-26.1.2-1.1.5.jar");
-const SNINE_26_3_JAR: &[u8] = include_bytes!("../resources/snineclient-26.3-1.1.5.jar");
+const SNINE_26_1_2_JAR: &[u8] = include_bytes!("../resources/snineclient-26.1.2-1.1.6.jar");
+const SNINE_26_3_JAR: &[u8] = include_bytes!("../resources/snineclient-26.3-1.1.6.jar");
 
 #[derive(Clone)]
 pub struct Installer {
@@ -123,8 +123,8 @@ impl Installer {
             .find(|profile| profile.id == profile_id)
             .ok_or("Unknown profile")?;
         let bundled_client = match target_profile.minecraft_version.as_str() {
-            "26.1.2" => Some(("bundled-build-26.1.2-1.1.5", SNINE_26_1_2_JAR)),
-            "26.3" => Some(("bundled-build-26.3-1.1.5", SNINE_26_3_JAR)),
+            "26.1.2" => Some(("bundled-build-26.1.2-1.1.6", SNINE_26_1_2_JAR)),
+            "26.3" => Some(("bundled-build-26.3-1.1.6", SNINE_26_3_JAR)),
             _ => None,
         };
         if !matches!(
@@ -423,7 +423,7 @@ impl Installer {
             .ok_or("Unknown profile")?;
         let bundled_client = matches!(profile.minecraft_version.as_str(), "26.1.2" | "26.3");
         let latest = if bundled_client {
-            "1.1.5".to_owned()
+            "1.1.6".to_owned()
         } else {
             self.resolve_release().await?.version
         };

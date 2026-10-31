@@ -41,7 +41,7 @@ export const ipc = {
   bootstrap: (): Promise<Bootstrap> => isTauri()
     ? invoke("bootstrap")
     : import.meta.env.DEV
-      ? Promise.resolve({ profiles: [{ id: "demo", name: "SNineClient", groupName: "", clientVersion: "1.1.5", minecraftVersion: "1.21.11", installed: false, clientReady: false, selected: true, favorite: false, hidden: false, loaderType: "fabric", loaderVersion: null, snineclientEnabled: true, snineclientVersion: "1.1.5", iconId: null, memoryMb: null }], selectedProfileId: "demo", recentProfileIds: ["demo"], activity: [], schemaVersion: 9 })
+      ? Promise.resolve({ profiles: [{ id: "demo", name: "SNineClient", groupName: "", clientVersion: "1.1.6", minecraftVersion: "1.21.11", installed: false, clientReady: false, selected: true, favorite: false, hidden: false, loaderType: "fabric", loaderVersion: null, snineclientEnabled: true, snineclientVersion: "1.1.6", iconId: null, memoryMb: null }], selectedProfileId: "demo", recentProfileIds: ["demo"], activity: [], schemaVersion: 9 })
       : Promise.resolve({ profiles: [], selectedProfileId: null, recentProfileIds: [], activity: [], schemaVersion: 5 }),
   getMinecraftMemory: (): Promise<number> => invoke("get_minecraft_memory_setting"),
   setMinecraftMemory: (megabytes: number): Promise<void> => invoke("set_minecraft_memory_setting", { megabytes }),

@@ -12,6 +12,6 @@ Keep that file private, back it up securely, and never commit or send it in chat
 
 ## Publishing
 
-Push a tag such as `launcher-v1.0.13`. GitHub Actions builds signed NSIS and MSI installers and generates `latest.json`. The workflow leaves the release as a draft. Review the assets and updater manifest, then publish the release so the launcher's `releases/latest/download/latest.json` endpoint serves it.
+Push a tag such as `launcher-v1.0.14`. GitHub Actions builds signed NSIS and MSI installers and generates `latest.json`. The workflow leaves the release as a draft. Review the assets and updater manifest, then publish the release so the launcher's `releases/latest/download/latest.json` endpoint serves it.
 
 The first install of this app identity still needs a normal installer. Existing launcher builds without this updater configuration cannot update themselves to this build; give those users the new installer once. Subsequent releases can update in-app.

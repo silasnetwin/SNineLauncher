@@ -276,7 +276,7 @@ impl Database {
             .as_secs() as i64;
         let mut db = self.0.lock().map_err(|_| rusqlite::Error::InvalidQuery)?;
         let tx = db.transaction()?;
-        tx.execute("INSERT INTO profiles(id,name,client_version,minecraft_version,installed,created_at,loader_type,loader_version,snineclient_enabled,memory_mb,icon_id,snineclient_version,updated_at) VALUES(?1,?2,?3,?4,0,?5,?6,?7,?8,?9,?10,?11,?5)", params![id,name,if snineclient_enabled { "1.1.5" } else { "Vanilla" },minecraft_version,timestamp,loader_type.as_str(),loader_version,snineclient_enabled as i64,memory_mb,icon_id,if snineclient_enabled { Some("1.1.5") } else { None }])?;
+        tx.execute("INSERT INTO profiles(id,name,client_version,minecraft_version,installed,created_at,loader_type,loader_version,snineclient_enabled,memory_mb,icon_id,snineclient_version,updated_at) VALUES(?1,?2,?3,?4,0,?5,?6,?7,?8,?9,?10,?11,?5)", params![id,name,if snineclient_enabled { "1.1.6" } else { "Vanilla" },minecraft_version,timestamp,loader_type.as_str(),loader_version,snineclient_enabled as i64,memory_mb,icon_id,if snineclient_enabled { Some("1.1.6") } else { None }])?;
         tx.execute(
             "UPDATE settings SET value=?1 WHERE key='selected_profile_id'",
             [&id],
@@ -292,7 +292,7 @@ impl Database {
             name,
             group_name: String::new(),
             client_version: if snineclient_enabled {
-                "1.1.5".into()
+                "1.1.6".into()
             } else {
                 "Vanilla".into()
             },
@@ -307,7 +307,7 @@ impl Database {
             icon_id,
             memory_mb,
             snineclient_version: if snineclient_enabled {
-                Some("1.1.5".into())
+                Some("1.1.6".into())
             } else {
                 None
             },
@@ -506,12 +506,16 @@ impl Database {
         let tx = db.transaction()?;
         let now = unix_now();
         tx.execute(
-            "INSERT OR IGNORE INTO profiles(id,name,client_version,minecraft_version,installed,created_at,favorite,hidden,client_ready,loader_type,loader_version,snineclient_enabled,icon_id,memory_mb,updated_at,snineclient_version,group_name) VALUES('snineclient-default','SNineClient','1.1.5','1.21.11',0,?1,0,0,0,'fabric','0.19.5',1,NULL,NULL,?1,'1.1.5','')",
+            "INSERT OR IGNORE INTO profiles(id,name,client_version,minecraft_version,installed,created_at,favorite,hidden,client_ready,loader_type,loader_version,snineclient_enabled,icon_id,memory_mb,updated_at,snineclient_version,group_name) VALUES('snineclient-default','SNineClient','1.1.6','1.21.11',0,?1,0,0,0,'fabric','0.19.5',1,NULL,NULL,?1,'1.1.6','')",
             [now],
         )?;
-        // Upgrade only the untouched placeholder created by older launcher builds.
+        // Keep the built-in latest profile pointed at the newest SNC release.
         tx.execute(
-            "UPDATE profiles SET client_version='1.1.5',minecraft_version='1.21.11',loader_type='fabric',loader_version='0.19.5',snineclient_enabled=1,snineclient_version='1.1.5',updated_at=?1 WHERE id='snineclient-default' AND minecraft_version='Latest supported'",
+            "UPDATE profiles SET client_version='1.1.6',snineclient_version='1.1.6' WHERE id='snineclient-default' AND minecraft_version='1.21.11' AND snineclient_enabled=1",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE profiles SET client_version='1.1.6',minecraft_version='1.21.11',loader_type='fabric',loader_version='0.19.5',snineclient_enabled=1,snineclient_version='1.1.6',updated_at=?1 WHERE id='snineclient-default' AND minecraft_version='Latest supported'",
             [now],
         )?;
         tx.execute(
@@ -519,7 +523,7 @@ impl Database {
             [],
         )?;
         tx.execute(
-            "INSERT OR IGNORE INTO profiles(id,name,client_version,minecraft_version,installed,created_at,favorite,hidden,client_ready,loader_type,loader_version,snineclient_enabled,icon_id,memory_mb,updated_at,snineclient_version,group_name) VALUES('snineclient-26-1-2','SNineClient 26.1.2','1.1.5','26.1.2',0,?1,0,0,0,'fabric','0.19.5',1,NULL,NULL,?1,'1.1.5','')",
+            "INSERT OR IGNORE INTO profiles(id,name,client_version,minecraft_version,installed,created_at,favorite,hidden,client_ready,loader_type,loader_version,snineclient_enabled,icon_id,memory_mb,updated_at,snineclient_version,group_name) VALUES('snineclient-26-1-2','SNineClient 26.1.2','1.1.6','26.1.2',0,?1,0,0,0,'fabric','0.19.5',1,NULL,NULL,?1,'1.1.6','')",
             [now.saturating_add(1)],
         )?;
         tx.execute(
@@ -536,7 +540,7 @@ impl Database {
         let tx = db.transaction()?;
         let now = unix_now();
         tx.execute(
-            "INSERT OR IGNORE INTO profiles(id,name,client_version,minecraft_version,installed,created_at,favorite,hidden,client_ready,loader_type,loader_version,snineclient_enabled,icon_id,memory_mb,updated_at,snineclient_version,group_name) VALUES('snineclient-26-3','SNineClient 26.3','1.1.5','26.3',0,?1,0,0,0,'fabric','0.19.5',1,NULL,NULL,?1,'1.1.5','')",
+            "INSERT OR IGNORE INTO profiles(id,name,client_version,minecraft_version,installed,created_at,favorite,hidden,client_ready,loader_type,loader_version,snineclient_enabled,icon_id,memory_mb,updated_at,snineclient_version,group_name) VALUES('snineclient-26-3','SNineClient 26.3','1.1.6','26.3',0,?1,0,0,0,'fabric','0.19.5',1,NULL,NULL,?1,'1.1.6','')",
             [now.saturating_add(3)],
         )?;
         tx.commit()
