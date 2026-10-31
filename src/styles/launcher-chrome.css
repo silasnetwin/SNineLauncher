@@ -194,4 +194,5 @@
 .s9-pack-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 11px; border-top: 1px solid rgba(255,255,255,.06); }
 .s9-pack-footer > span { color: #92949e; font-size: 9px; line-height: 1.4; }
 .s9-pack-footer .compact-play { min-height: 32px; flex: 0 0 auto; gap: 6px; border-radius: 7px; }
+.s9-pack-footer .s9-pack-toggle { min-height: 32px; flex: 0 0 auto; gap: 6px; border-radius: 7px; }
 @media (max-width: 720px) { .s9-pack-grid { grid-template-columns: minmax(0,1fr); } .s9-packs-heading { flex-direction: column; } }

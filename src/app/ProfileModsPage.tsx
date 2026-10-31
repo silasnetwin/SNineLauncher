@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Clipboard, Download, PackageOpen, Plus, Search, Settings2, Sparkles, Trash2, Upload, X } from "lucide-react";
 import { ipc, type LoaderType, type ManagedMod, type ModrinthProject, type ModUpdateStatus } from "../lib/ipc";
+import { ensureDefaultS9Packs, getS9PackPreference, setS9PackPreference, type S9ModPack } from "../lib/s9Packs";
 import bundledPackCatalog from "../../s9-client-packs/catalog.json";
 
 const searchCache = new Map<string, { savedAt: number; results: ModrinthProject[] }>();
@@ -8,7 +9,6 @@ const projectIconCache = new Map<string, string>();
 const CACHE_TTL = 5 * 60_000;
 const browseCategories = ["all", "optimization", "utility", "library", "technology", "worldgen"] as const;
 const PACK_CATALOG_URL = "https://raw.githubusercontent.com/silasnetwin/SNineLauncher/main/s9-client-packs/catalog.json";
-type S9ModPack = { id: string; name: string; description: string; loader: LoaderType; minecraftVersions: string[]; mods: Array<{ projectId: string; slug: string }> };
 type PackCatalogSource = "GitHub" | "Built in";
 
 function parsePackCatalog(value: unknown): S9ModPack[] | null {
@@ -32,11 +32,12 @@ function parsePackCatalog(value: unknown): S9ModPack[] | null {
   return packs;
 }
 
-export function ProfileModsPage({ profileId, minecraftVersion, loaderType = "fabric", installed }: { profileId: string; minecraftVersion: string; loaderType?: LoaderType; installed: boolean }) {
+export function ProfileModsPage({ profileId, minecraftVersion, loaderType = "fabric", installed, defaultSnineProfile = false }: { profileId: string; minecraftVersion: string; loaderType?: LoaderType; installed: boolean; defaultSnineProfile?: boolean }) {
   const [view, setView] = useState<"Installed" | "Browse" | "Packs">("Installed");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<ModrinthProject[]>([]);
   const [mods, setMods] = useState<ManagedMod[]>([]);
+  const [modsLoaded, setModsLoaded] = useState(false);
   const [updates, setUpdates] = useState<ModUpdateStatus[]>([]);
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -57,10 +58,13 @@ export function ProfileModsPage({ profileId, minecraftVersion, loaderType = "fab
   const [projectIcons, setProjectIcons] = useState<Record<string, string>>({});
   const [packCatalog, setPackCatalog] = useState<S9ModPack[]>(() => parsePackCatalog(bundledPackCatalog) ?? []);
   const [packCatalogSource, setPackCatalogSource] = useState<PackCatalogSource>("Built in");
+  const [packSyncing, setPackSyncing] = useState(false);
+  const [packPreferences, setPackPreferences] = useState<Record<string, boolean>>(() => Object.fromEntries((parsePackCatalog(bundledPackCatalog) ?? []).map(pack => [pack.id, getS9PackPreference(profileId, pack.id) ?? defaultSnineProfile])));
   const [browseCategory, setBrowseCategory] = useState<(typeof browseCategories)[number]>("all");
   const [browseSort, setBrowseSort] = useState<"downloads" | "name">("downloads");
   const [searchRetry, setSearchRetry] = useState(0);
   const requestId = useRef(0);
+  const syncedDefaultProfiles = useRef(new Set<string>());
   const flushSearchRef = useRef(false);
   const canManageModrinthMods = loaderType === "fabric";
   const compatiblePacks = useMemo(() => packCatalog.filter(pack => pack.loader === loaderType && pack.minecraftVersions.includes(minecraftVersion)), [loaderType, minecraftVersion, packCatalog]);
@@ -81,7 +85,7 @@ export function ProfileModsPage({ profileId, minecraftVersion, loaderType = "fab
   useEffect(() => {
     if (!installed) return;
     let current = true;
-    void ipc.getManagedMods(profileId).then(value => { if (current) setMods(value); }).catch(reason => { if (current) setError(toMessage(reason)); });
+    void ipc.getManagedMods(profileId).then(value => { if (current) { setMods(value); setModsLoaded(true); } }).catch(reason => { if (current) { setError(toMessage(reason)); setModsLoaded(true); } });
     return () => { current = false; };
   }, [profileId, installed]);
 
@@ -103,6 +107,21 @@ export function ProfileModsPage({ profileId, minecraftVersion, loaderType = "fab
       .finally(() => window.clearTimeout(timeout));
     return () => { window.clearTimeout(timeout); controller.abort(); };
   }, [installed]);
+
+  useEffect(() => {
+    if (!installed || !defaultSnineProfile || !modsLoaded || !canManageModrinthMods || syncedDefaultProfiles.current.has(profileId)) return;
+    syncedDefaultProfiles.current.add(profileId);
+    let current = true;
+    setPackSyncing(true);
+    void ensureDefaultS9Packs(profileId, minecraftVersion, loaderType).then(async result => {
+      if (!current) return;
+      setMods(await ipc.getManagedMods(profileId));
+      if (result.failed.length) setError(`Some default S9 Pack mods could not be installed: ${result.failed.join(", ")}.`);
+      else if (result.installed) setNotice(`Default S9 Packs installed · ${result.installed} mods.`);
+    }).catch(reason => { if (current) setError(toMessage(reason)); })
+      .finally(() => { if (current) setPackSyncing(false); });
+    return () => { current = false; };
+  }, [installed, defaultSnineProfile, modsLoaded, canManageModrinthMods, profileId, minecraftVersion, loaderType]);
 
   useEffect(() => {
     const iconMods = mods.filter(mod => !mod.iconDataUrl);
@@ -181,19 +200,32 @@ export function ProfileModsPage({ profileId, minecraftVersion, loaderType = "fab
     catch (reason) { const message = toMessage(reason); if (view === "Browse") setBrowseActionError(message); else setError(message); }
     finally { setWorking(null); }
   };
-  const installPack = async (pack: S9ModPack) => {
-    if (!canManageModrinthMods) { setError("Pack installs currently require a Fabric profile."); return; }
-    const queue = [...new Map(pack.mods.filter(mod => !installedIds.has(mod.projectId)).map(mod => [mod.projectId, mod])).values()];
-    if (!queue.length) { setNotice(`${pack.name} is already installed.`); return; }
-    setBusy(true); setError(""); setNotice("");
+  const packIsEnabled = (pack: S9ModPack) => packPreferences[pack.id] ?? getS9PackPreference(profileId, pack.id) ?? defaultSnineProfile;
+  const togglePack = async (pack: S9ModPack) => {
+    if (!canManageModrinthMods) { setError("S9 Packs currently require a Fabric profile."); return; }
+    const enable = !packIsEnabled(pack);
+    setPackSyncing(true); setError(""); setNotice("");
     const failed: string[] = [];
-    for (const mod of queue) {
-      try { setMods(await ipc.installModrinthMod(profileId, mod.projectId, mod.slug)); }
-      catch { failed.push(mod.slug); }
+    let nextMods = mods;
+    for (const entry of pack.mods) {
+      const current = nextMods.find(mod => mod.managed && mod.projectId === entry.projectId);
+      try {
+        if (enable && !current) nextMods = await ipc.installModrinthMod(profileId, entry.projectId, entry.slug);
+        else if (current && current.enabled !== enable) {
+          await ipc.setModEnabled(profileId, current.filename, enable);
+          nextMods = nextMods.map(mod => mod.filename === current.filename ? { ...mod, enabled: enable } : mod);
+        }
+        setMods(nextMods);
+      } catch { failed.push(entry.slug); }
     }
-    setBusy(false);
-    setNotice(failed.length ? `${queue.length - failed.length} of ${queue.length} mods installed. Could not install: ${failed.join(", ")}.` : `${pack.name} installed · ${queue.length} mods added.`);
-    setView("Installed");
+    setPackSyncing(false);
+    if (failed.length) {
+      setError(`Could not ${enable ? "enable" : "disable"} all ${pack.name} mods: ${failed.join(", ")}.`);
+      return;
+    }
+    setS9PackPreference(profileId, pack.id, enable);
+    setPackPreferences(current => ({ ...current, [pack.id]: enable }));
+    setNotice(enable ? `${pack.name} enabled and installed.` : `${pack.name} disabled. The mod files are kept.`);
   };
   const toggle = async (mod: ManagedMod) => {
     setWorking(mod.filename); setError("");
@@ -295,13 +327,13 @@ export function ProfileModsPage({ profileId, minecraftVersion, loaderType = "fab
           </article>;
         })}</div>
       </> : <section className="s9-packs-page" aria-label="S9 Client Packs">
-        <div className="s9-packs-heading"><span><small>CURATED FOR S9 CLIENT</small><strong>Ready-to-install mod sets</strong><p>Choose a pack to add compatible mods to this profile. Existing mods and settings are kept.</p></span><i className={packCatalogSource === "GitHub" ? "connected" : ""}><span />{packCatalogSource === "GitHub" ? "GitHub synced" : "Built-in list"}</i></div>
+        <div className="s9-packs-heading"><span><small>CURATED FOR S9 CLIENT</small><strong>SNine Packs</strong><p>Default SNine profiles install compatible packs automatically. Switch a pack off to disable its mods; files stay in the profile.</p></span><i className={packCatalogSource === "GitHub" ? "connected" : ""}><span />{packCatalogSource === "GitHub" ? "GitHub synced" : "Built-in list"}</i></div>
         {notice && <p className="profile-mod-note" role="status">{notice}</p>}{error && <p className="profile-mod-error" role="alert">{error}</p>}
         {compatiblePacks.length === 0 ? <div className="mods-empty"><PackageOpen size={18} /><strong>No packs for this profile yet</strong><p>Pack availability depends on its Minecraft version and loader.</p></div> : <div className="s9-pack-grid">{compatiblePacks.map(pack => {
           const included = new Set(pack.mods.map(mod => mod.projectId));
           const alreadyInstalled = [...included].filter(projectId => installedIds.has(projectId)).length;
-          const remaining = included.size - alreadyInstalled;
-          return <article className="s9-pack-card" key={pack.id}><div className="s9-pack-icon"><PackageOpen size={19} /></div><div className="s9-pack-copy"><h3>{pack.name}</h3><p>{pack.description}</p><small>{included.size} mods · Fabric · Minecraft {minecraftVersion}</small></div><div className="s9-pack-footer"><span>{alreadyInstalled ? `${alreadyInstalled} of ${included.size} already installed` : "Adds mods without removing files"}</span><button className="compact-play" disabled={busy || remaining === 0 || !canManageModrinthMods} onClick={() => void installPack(pack)}>{busy ? "Installing…" : remaining === 0 ? <><Check size={14} /> Installed</> : <><Download size={14} /> Add pack · {remaining}</>}</button></div></article>;
+          const enabled = packIsEnabled(pack);
+          return <article className="s9-pack-card" key={pack.id}><div className="s9-pack-icon"><PackageOpen size={19} /></div><div className="s9-pack-copy"><h3>{pack.name}</h3><p>{pack.description}</p><small>{included.size} mods · Fabric · Minecraft {minecraftVersion}</small></div><div className="s9-pack-footer"><span>{enabled ? `${alreadyInstalled} of ${included.size} installed · enabled` : `${alreadyInstalled} installed · disabled`}</span><button type="button" role="switch" aria-checked={enabled} className={enabled ? "compact-play s9-pack-toggle active" : "secondary-action s9-pack-toggle"} disabled={packSyncing || busy || !canManageModrinthMods} onClick={() => void togglePack(pack)}>{packSyncing ? "Working…" : enabled ? <><Check size={14} /> On</> : <><Download size={14} /> Enable</>}</button></div></article>;
         })}</div>}
         {!canManageModrinthMods && <p className="profile-mod-note">S9 packs currently require a Fabric profile.</p>}
       </section>}

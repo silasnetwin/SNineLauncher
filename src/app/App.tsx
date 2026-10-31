@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { ipc, type AuthState, type BlockIconEntry, type DeviceLoginPrompt, type DownloadProgress, type LaunchVerification, type MinecraftVersionInfo, type Profile, type ProfileManageInfo, type RuntimeStatus, type SafeAccount, type StorageInfo, type LoaderType, type MinecraftWindowSettings } from "../lib/ipc";
+import { ensureDefaultS9Packs, isDefaultSnineProfile } from "../lib/s9Packs";
 import { findSelectedProfile, insertCreatedProfile } from "../lib/profile-utils";
 import { markStartup } from "../lib/startup";
 import { ProfileCard, ProfileCover } from "./ProfileCard";
@@ -23,7 +24,7 @@ type LibraryPreferences = { tab: LibraryTab; view: "grid" | "list"; sort: string
 type LauncherCommand = { id: string; label: string; description: string; keywords: string; icon: ReactNode; run: () => void };
 const CORNER_STYLE_KEY = "snine.launcher.corner-style.v1";
 const LIBRARY_PREFS_KEY = "snine.launcher.library-preferences.v1";
-const LAUNCHER_VERSION = "1.0.13";
+const LAUNCHER_VERSION = "1.0.16";
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 const requiredJavaMajor = (profile: Profile) => ["26.1.2", "26.2", "26.3"].includes(profile.minecraftVersion) ? 25 : 21;
 const ProfileCreationForm = lazy(() => import("./ProfileManagementForms").then(module => ({ default: module.ProfileCreationForm })));
@@ -331,10 +332,18 @@ export function App() {
         if (!currentRuntime.compatible) throw new Error(`Managed Java ${requiredJava} installed, but runtime validation did not find a compatible executable.`);
       }
       const result = await ipc.installMinecraftProfile(profile.id);
+      let s9PackNotice = "";
+      if (profile.snineclientEnabled && isDefaultSnineProfile(profile.id)) {
+        try {
+          const packs = await ensureDefaultS9Packs(profile.id, result.minecraftVersion, profile.loaderType);
+          if (packs.failed.length) s9PackNotice = ` S9 Packs: ${packs.installed} installed; failed: ${packs.failed.join(", ")}. Retry in Profile → Mods → Packs.`;
+          else if (packs.installed) s9PackNotice = ` S9 Packs installed (${packs.installed} mods).`;
+        } catch { s9PackNotice = " S9 Packs could not be checked; retry in Profile → Mods → Packs."; }
+      }
       const state = await ipc.bootstrap();
       setProfiles(state.profiles);
       setSelectedId(state.selectedProfileId);
-      showToast(profile.loaderType === "fabric" || profile.loaderType === "quilt" ? `Minecraft ${result.minecraftVersion} with ${profile.loaderType === "quilt" ? "Quilt" : "Fabric"} ${result.loaderVersion}${profile.snineclientEnabled ? " and SNineClient" : ""} is ready (${result.libraryCount} libraries, ${result.assetCount} assets).` : `Vanilla Minecraft ${result.minecraftVersion} is ready (${result.libraryCount} libraries, ${result.assetCount} assets).`);
+      showToast(profile.loaderType === "fabric" || profile.loaderType === "quilt" ? `Minecraft ${result.minecraftVersion} with ${profile.loaderType === "quilt" ? "Quilt" : "Fabric"} ${result.loaderVersion}${profile.snineclientEnabled ? " and SNineClient" : ""} is ready (${result.libraryCount} libraries, ${result.assetCount} assets).${s9PackNotice}` : `Vanilla Minecraft ${result.minecraftVersion} is ready (${result.libraryCount} libraries, ${result.assetCount} assets).`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       showToast(message.includes("DiskFull") ? "Not enough disk space to install the profile." : `Install failed: ${message}`);
@@ -349,10 +358,18 @@ export function App() {
     if (playingIds.includes(profile.id)) return;
     try {
       setPlayingIds(ids => ids.includes(profile.id) ? ids : [...ids, profile.id]);
+      let packNotice = "";
+      if (profile.snineclientEnabled && isDefaultSnineProfile(profile.id)) {
+        try {
+          const packs = await ensureDefaultS9Packs(profile.id, profile.minecraftVersion, profile.loaderType);
+          if (packs.failed.length) packNotice = ` S9 Pack install had errors: ${packs.failed.join(", ")}.`;
+          else if (packs.installed) packNotice = ` Installed ${packs.installed} default S9 Pack mods.`;
+        } catch { packNotice = " S9 Packs could not be checked; retry in Profile → Mods → Packs."; }
+      }
       const result = await ipc.launchMinecraftProfile(profile.id);
       if (result.state !== "running") setPlayingIds(ids => ids.filter(id => id !== profile.id));
       await ipc.bootstrap();
-      showToast(`Started ${profile.name}.`);
+      showToast(`Started ${profile.name}.${packNotice}`);
     } catch (error) {
       setPlayingIds(ids => ids.filter(id => id !== profile.id));
       const message = error instanceof Error ? error.message : String(error);
@@ -909,7 +926,7 @@ function ProfileDetails({ profile, resolvedState, installing, runtimeStatus, man
     <div className="detail-hero"><ProfileCover profile={profile} className="detail-cover" /><div className="detail-identity"><span className="detail-eyebrow">PROFILE</span>{editingName ? <form className="profile-rename-form" onSubmit={event => { event.preventDefault(); onRename(nameDraft); setEditingName(false); }}><input autoFocus maxLength={48} aria-label="Profile name" value={nameDraft} onChange={event => setNameDraft(event.target.value)} /><button className="subtle-icon" aria-label="Save profile name" disabled={!nameDraft.trim()}><Check size={15} /></button><button type="button" className="subtle-icon" aria-label="Cancel rename" onClick={() => { setNameDraft(profile.name); setEditingName(false); }}><X size={15} /></button></form> : <div className="profile-title-edit"><h1>{profile.name}</h1><button className="subtle-icon" aria-label="Rename profile" title="Rename profile" onClick={() => setEditingName(true)}><Pencil size={14} /></button></div>}<p>Minecraft {profile.minecraftVersion} · {loaderLabel} · SNineClient {profile.snineclientEnabled ? "On" : "Off"}</p><div className="detail-hero-actions"><button type="button" className="secondary-action" onClick={onChangeIcon}>Change icon</button><button className="compact-play" disabled={actionDisabled || installing} title={profile.clientReady && runtimeReady && !profile.installed ? "Install Minecraft and Fabric before playing." : undefined} onClick={resolvedState === "RepairRequired" ? onRepair : resolvedState === "UpdateAvailable" ? onUpdate : onInstall}>{profile.installed && resolvedState !== "RepairRequired" && resolvedState !== "UpdateAvailable" ? <Gamepad2 size={15} /> : <Download size={15} />}{actionLabel}</button></div></div><aside className="detail-hero-status"><span className={`detail-status-pill ${readinessTone}`}><i />{readiness}</span><strong>{profile.installed ? "Installation" : "Profile setup"}</strong><small>Minecraft {profile.minecraftVersion}</small><small>{loaderLabel}{profile.snineclientEnabled ? " · SNineClient" : ""}</small><small>{runtimeStatus ? `Java ${runtimeStatus.requiredMajor}${runtimeReady ? " ready" : " needed"}` : "Checking Java runtime…"}</small></aside></div>
     <div className="profile-manage-tabs" role="tablist" aria-label="Profile management">{(["Overview", "Mods", "Resource Packs", "Game content", "Settings"] as const).map(tab => <button key={tab} role="tab" aria-selected={manageTab === tab} className={manageTab === tab ? "active" : ""} onClick={() => { if (tab === "Game content") { setContentInitialSection("shaderpacks"); setContentMountId(value => value + 1); } setManageTab(tab); }}>{tab}</button>)}</div>
     {manageTab === "Overview" && <div className="detail-overview"><div className="detail-section-heading"><div><span>PROFILE</span><h2>Overview</h2></div><div className="manage-action-row"><button className="secondary-action" disabled={backupBusy || (!profile.installed && !profile.clientReady)} onClick={() => void createBackup()}><Download size={14} />{backupBusy ? "Creating backup…" : "Create backup"}</button><button className="secondary-action" disabled={backupBusy || (!profile.installed && !profile.clientReady)} onClick={() => void restoreBackup()}><History size={14} />Restore backup</button><button className="secondary-action" onClick={onDuplicate}><Copy size={14} /> Duplicate</button></div></div><div className="detail-info-grid"><div><span>Status</span><strong><i className={profile.clientReady ? "status-dot online" : "status-dot"} />{profile.clientReady ? runtimeReady ? "Client and Java ready · Minecraft/loader setup required" : `Client installed · Java ${requiredJavaMajor(profile)} required` : "Ready to install"}</strong></div><div><span>Client version</span><strong>{manageInfo?.clientVersion ?? profile.clientVersion}</strong></div><div><span>Minecraft version</span><strong>{manageInfo?.minecraftVersion ?? profile.minecraftVersion}</strong></div><div><span>Java runtime</span><strong>{manageInfo?.runtime ?? (runtimeStatus?.compatible ? `${runtimeStatus.compatible.detail} ready${runtimeStatus.managed ? " · managed" : ""}` : runtimeStatus?.candidates.length ? `Java ${runtimeStatus.candidates[0].major ?? "?"} found · Java ${runtimeStatus.requiredMajor} required` : "Java runtime not found")}</strong></div></div>{backupMessage && <p className="profile-mod-note" role="status">{backupMessage}</p>}</div>}
-    {manageTab === "Mods" && <Suspense fallback={<div className="lazy-panel-placeholder" role="status">Loading mods…</div>}><ProfileModsPage key={profile.id} profileId={profile.id} minecraftVersion={manageInfo?.minecraftVersion ?? profile.minecraftVersion} loaderType={profile.loaderType} installed={profile.installed} /></Suspense>}
+    {manageTab === "Mods" && <Suspense fallback={<div className="lazy-panel-placeholder" role="status">Loading mods…</div>}><ProfileModsPage key={profile.id} profileId={profile.id} minecraftVersion={manageInfo?.minecraftVersion ?? profile.minecraftVersion} loaderType={profile.loaderType} installed={profile.installed} defaultSnineProfile={profile.snineclientEnabled && isDefaultSnineProfile(profile.id)} /></Suspense>}
     {manageTab === "Resource Packs" && <Suspense fallback={<div className="lazy-panel-placeholder" role="status">Loading resource packs…</div>}><ProfileResourcePacksPage key={profile.id} profileId={profile.id} minecraftVersion={manageInfo?.minecraftVersion ?? profile.minecraftVersion} installed={profile.installed} /></Suspense>}
     {manageTab === "Settings" && <ProfileGroupEditor profileId={profile.id} groupName={profileGroup} onChange={setProfileGroup} onSaved={onGroupChanged} />}
     {manageTab === "Game content" && <Suspense fallback={<div className="lazy-panel-placeholder" role="status">Loading game content…</div>}><ProfileContentPage key={`${profile.id}-${contentMountId}`} profileId={profile.id} installed={profile.installed} running={resolvedState === "Running"} initialSection={contentInitialSection} /></Suspense>}
