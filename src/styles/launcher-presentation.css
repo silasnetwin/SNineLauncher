@@ -92,7 +92,7 @@ body, .app-shell { background: #18191d; }
 .bottom-bar { height: 42px; flex-basis: 42px; border: 0; border-radius: 0; }
 
 /* Card context menu follows the attached launcher reference behavior. */
-.profile-context-menu { position: fixed; z-index: 30; width: 270px; max-height: calc(100vh - 16px); overflow: auto; padding: 5px; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; background: #292a30; box-shadow: 0 12px 34px rgba(0,0,0,.52); animation: menu-in 90ms ease-out; }
+.profile-context-menu { position: fixed; z-index: 30; box-sizing: border-box; width: 270px; max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; scrollbar-width: thin; scrollbar-color: #595b65 transparent; padding: 5px; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; background: #292a30; box-shadow: 0 12px 34px rgba(0,0,0,.52); animation: menu-in 90ms ease-out; }
 .profile-menu-item { width: 100%; min-height: 41px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: #efeff1; text-align: left; font-size: 13px; font-weight: 500; }
 .profile-menu-item:hover:not(:disabled), .profile-menu-item:focus-visible:not(:disabled) { background: #414249; }
 .profile-menu-item:disabled { color: #96969e; cursor: default; opacity: .78; }

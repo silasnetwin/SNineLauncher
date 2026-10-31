@@ -66,17 +66,28 @@ export const ProfileCard = memo(function ProfileCard({ profile, listView, chosen
   const menuRef = useRef<HTMLDivElement>(null);
   const openMenu = useCallback((point?: { x: number; y: number }) => {
     const rect = overflowRef.current?.getBoundingClientRect();
-    const menuWidth = 254;
+    const menuWidth = 270;
     const left = point?.x ?? (rect ? rect.right - 5 : 16);
     const top = point?.y ?? (rect ? rect.top + 20 : 16);
     setMenuPosition({
       left: Math.max(8, Math.min(left, window.innerWidth - menuWidth - 8)),
-      top: Math.max(8, Math.min(top, window.innerHeight - 360)),
+      top: Math.max(8, Math.min(top, window.innerHeight - 80)),
     });
   }, []);
 
   useLayoutEffect(() => {
     if (!menuPosition) return;
+    const menu = menuRef.current;
+    if (!menu) return;
+    const rect = menu.getBoundingClientRect();
+    const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    const left = Math.max(8, Math.min(menuPosition.left, viewportWidth - rect.width - 8));
+    const top = Math.max(8, Math.min(menuPosition.top, viewportHeight - rect.height - 8));
+    if (left !== menuPosition.left || top !== menuPosition.top) {
+      setMenuPosition({ left, top });
+      return;
+    }
     const first = menuRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)");
     first?.focus();
   }, [menuPosition]);
@@ -108,7 +119,7 @@ export const ProfileCard = memo(function ProfileCard({ profile, listView, chosen
   const primaryDisabled = installing || playing || (profile.clientReady && runtimeStatus === null);
   const primaryAction = () => { if (primaryDisabled) { setMenuPosition(null); } else if (resolvedState === "RepairRequired") { onRepair(profile); setMenuPosition(null); } else if (resolvedState === "UpdateAvailable") { onUpdate(profile); setMenuPosition(null); } else { profile.installed ? onPlay(profile) : onInstall(profile); setMenuPosition(null); } };
   const showMenu = menuPosition ? createPortal(
-    <div className="profile-context-menu" role="menu" aria-label={`${profile.name} actions`} ref={menuRef} style={{ left: menuPosition.left, top: menuPosition.top }} onPointerDown={event => event.stopPropagation()}>
+    <div className="profile-context-menu" role="menu" aria-label={`${profile.name} actions`} ref={menuRef} style={{ left: menuPosition.left, top: menuPosition.top }} onPointerDown={event => event.stopPropagation()} onWheel={event => event.stopPropagation()}>
       <MenuItem icon={<Settings2 size={16} />} label="Open profile" onClick={() => { setMenuPosition(null); onOpen(profile); }} />
       <MenuItem icon={<Check size={16} />} label={chosen ? "Selected profile" : "Make selected profile"} disabled={chosen} onClick={() => { onSetSelected(profile); setMenuPosition(null); }} />
       <MenuItem icon={<Heart size={16} fill={favorite ? "currentColor" : "none"} />} label={favorite ? "Remove from favorites" : "Add to favorites"} onClick={() => { onToggleFavorite(profile.id); setMenuPosition(null); }} />

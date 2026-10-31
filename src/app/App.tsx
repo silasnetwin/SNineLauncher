@@ -24,7 +24,7 @@ type LibraryPreferences = { tab: LibraryTab; view: "grid" | "list"; sort: string
 type LauncherCommand = { id: string; label: string; description: string; keywords: string; icon: ReactNode; run: () => void };
 const CORNER_STYLE_KEY = "snine.launcher.corner-style.v1";
 const LIBRARY_PREFS_KEY = "snine.launcher.library-preferences.v1";
-const LAUNCHER_VERSION = "1.0.16";
+const LAUNCHER_VERSION = "1.0.17";
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 const requiredJavaMajor = (profile: Profile) => ["26.1.2", "26.2", "26.3"].includes(profile.minecraftVersion) ? 25 : 21;
 const ProfileCreationForm = lazy(() => import("./ProfileManagementForms").then(module => ({ default: module.ProfileCreationForm })));
@@ -190,6 +190,37 @@ export function App() {
           const status = states[profile.id];
           return status === "NotInstalled" ? { ...profile, installed: false } : status === "Installed" || status === "Running" || status === "RepairRequired" || status === "UpdateAvailable" ? { ...profile, installed: true } : profile;
         }));
+        void (async () => {
+          let updatedProfiles = 0;
+          const failedProfiles: string[] = [];
+          for (const profile of state.profiles) {
+            if (!profile.snineclientEnabled || !profile.installed || states[profile.id] !== "Installed") continue;
+            try {
+              const update = await ipc.checkProfileUpdate(profile.id);
+              if (!update.available) continue;
+              setProfileActionIds(ids => ids.includes(profile.id) ? ids : [...ids, profile.id]);
+              setResolvedProfileStates(current => ({ ...current, [profile.id]: "Updating" }));
+              const result = await ipc.updateMinecraftProfile(profile.id);
+              if (result.updateAvailable) updatedProfiles += 1;
+            } catch (error) {
+              failedProfiles.push(profile.name);
+              console.warn(`Automatic SNineClient update failed for ${profile.name}`, error);
+            } finally {
+              setProfileActionIds(ids => ids.filter(id => id !== profile.id));
+            }
+          }
+          if (updatedProfiles > 0) {
+            const refreshed = await ipc.bootstrap().catch(() => null);
+            if (refreshed) {
+              setProfiles(refreshed.profiles);
+              setSelectedId(refreshed.selectedProfileId);
+            }
+            showToast(`SNineClient was automatically updated in ${updatedProfiles} profile${updatedProfiles === 1 ? "" : "s"}.`);
+          }
+          if (failedProfiles.length > 0) {
+            showToast(`Automatic SNineClient update failed for ${failedProfiles.join(", ")}. The current client version was kept.`);
+          }
+        })();
       });
     }).catch(error => {
       console.error("Launcher bootstrap failed", error);
