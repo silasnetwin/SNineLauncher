@@ -17,10 +17,9 @@ use tokio::fs;
 
 const CLIENT_RELEASES_API: &str =
     "https://api.github.com/repos/silasnetwin/SNineLauncher/releases?per_page=100";
+const CLIENT_UPDATE_MANIFEST_URL: &str = "https://snc.silasnet.win/updates/manifest.json";
 const CLIENT_RELEASE_PREFIX: &str = "client-v";
 const MAX_CLIENT_BYTES: u64 = 256 * 1024 * 1024;
-const SNINE_26_1_2_JAR: &[u8] = include_bytes!("../resources/snineclient-26.1.2-1.1.5.jar");
-const SNINE_26_3_JAR: &[u8] = include_bytes!("../resources/snineclient-26.3-1.1.5.jar");
 
 #[derive(Clone)]
 pub struct Installer {
@@ -78,6 +77,39 @@ struct GitHubReleaseAsset {
 #[derive(Debug, Deserialize)]
 struct ClientReleaseManifest {
     version: String,
+    #[serde(default)]
+    size: u64,
+    #[serde(default)]
+    sha256: String,
+    #[serde(rename = "assetName")]
+    #[serde(default)]
+    asset_name: String,
+    #[serde(default)]
+    artifacts: BTreeMap<String, ClientReleaseArtifact>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HomeClientUpdateManifest {
+    schema_version: u8,
+    channel: String,
+    version: String,
+    artifacts: BTreeMap<String, HomeClientArtifact>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HomeClientArtifact {
+    minecraft_version: String,
+    version: String,
+    size: u64,
+    sha256: String,
+    asset_name: String,
+    url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClientReleaseArtifact {
     size: u64,
     sha256: String,
     #[serde(rename = "assetName")]
@@ -122,11 +154,6 @@ impl Installer {
             .into_iter()
             .find(|profile| profile.id == profile_id)
             .ok_or("Unknown profile")?;
-        let bundled_client = match target_profile.minecraft_version.as_str() {
-            "26.1.2" => Some(("bundled-build-26.1.2-1.1.5", SNINE_26_1_2_JAR)),
-            "26.3" => Some(("bundled-build-26.3-1.1.5", SNINE_26_3_JAR)),
-            _ => None,
-        };
         if !matches!(
             target_profile.minecraft_version.as_str(),
             "1.21.11" | "26.1.2" | "26.3"
@@ -136,19 +163,11 @@ impl Installer {
             );
         }
         emit_stage(app, &profile_id, "resolving", None);
-        let release = if bundled_client.is_none() {
-            Some(self.resolve_release().await?)
-        } else {
-            None
-        };
-        let (version, expected_size) = if let Some((version, jar)) = bundled_client {
-            (version.to_owned(), jar.len() as u64)
-        } else {
-            let release = release
-                .as_ref()
-                .ok_or("SNine release metadata is unavailable")?;
-            (release.version.clone(), release.size)
-        };
+        let release = self
+            .resolve_release(&target_profile.minecraft_version)
+            .await?;
+        let version = release.version.clone();
+        let expected_size = release.size;
         if expected_size == 0 || expected_size > MAX_CLIENT_BYTES {
             return Err("SNine client artifact has an invalid or unsupported size".into());
         }
@@ -183,35 +202,19 @@ impl Installer {
                 .map_err(|e| format!("Could not clear previous staged client: {e}"))?;
         }
         let request = DownloadRequest {
-            url: release
-                .as_ref()
-                .map(|release| release.download_url.clone())
-                .unwrap_or_default(),
+            url: release.download_url.clone(),
             file_name: "snineclient.jar".into(),
-            expected_sha256: release.as_ref().map(|release| release.sha256.clone()),
+            expected_sha256: Some(release.sha256.clone()),
             profile_id: Some(profile_id.clone()),
             max_bytes: Some(expected_size),
         };
         emit_stage(app, &profile_id, "downloading", Some("snineclient.jar"));
-        let (receipt_id, receipt_bytes, receipt_sha256) = if let Some((_, jar)) = bundled_client {
-            fs::write(&staged_jar, jar).await.map_err(|error| {
-                format!(
-                    "Could not stage bundled SNineClient {}: {error}",
-                    target_profile.minecraft_version
-                )
-            })?;
-            (
-                uuid::Uuid::new_v4().to_string(),
-                expected_size,
-                format!("{:x}", Sha256::digest(jar)),
-            )
-        } else {
-            let receipt = self
-                .downloads
-                .download_to(app, &request, &staged_jar)
-                .await?;
-            (receipt.id, receipt.bytes, receipt.sha256)
-        };
+        let receipt = self
+            .downloads
+            .download_to(app, &request, &staged_jar)
+            .await?;
+        let (receipt_id, receipt_bytes, receipt_sha256) =
+            (receipt.id, receipt.bytes, receipt.sha256);
         if receipt_bytes != expected_size {
             return Err(format!("SNineClient artifact size did not match metadata (expected {expected_size}, received {receipt_bytes})"));
         }
@@ -302,7 +305,7 @@ impl Installer {
             }
             return Err(format!("Could not activate verified client: {error}"));
         }
-        let metadata = serde_json::json!({"serverRelease": version, "clientVersion": requirements.client_version, "minecraftVersion": requirements.minecraft_version, "requirements": requirements, "sha256":receipt_sha256, "size":receipt_bytes, "sha256Source":if release.is_some() { "github-release-manifest" } else { "bundled-launcher-artifact" }, "installedAt": chrono_free_now()});
+        let metadata = serde_json::json!({"serverRelease": version, "clientVersion": requirements.client_version, "minecraftVersion": requirements.minecraft_version, "requirements": requirements, "sha256":receipt_sha256, "size":receipt_bytes, "sha256Source":"github-release-manifest", "installedAt": chrono_free_now()});
         let metadata_temp = staging.join("client-install.json.tmp");
         fs::write(
             &metadata_temp,
@@ -421,12 +424,7 @@ impl Installer {
             .into_iter()
             .find(|profile| profile.id == profile_id)
             .ok_or("Unknown profile")?;
-        let bundled_client = matches!(profile.minecraft_version.as_str(), "26.1.2" | "26.3");
-        let latest = if bundled_client {
-            "1.1.5".to_owned()
-        } else {
-            self.resolve_release().await?.version
-        };
+        let latest = self.resolve_release(&profile.minecraft_version).await?.version;
         let path = self
             .root
             .join("profiles")
@@ -437,15 +435,17 @@ impl Installer {
             .ok()
             .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
             .and_then(|value| {
-                let field = if bundled_client {
-                    "clientVersion"
-                } else {
-                    "serverRelease"
-                };
-                value
-                    .get(field)
+                let server_release = value
+                    .get("serverRelease")
                     .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
+                    .filter(|version| parse_semver_triplet(version).is_some())
+                    .map(str::to_owned);
+                server_release.or_else(|| {
+                    value
+                        .get("clientVersion")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                })
             });
         let comparable = current
             .as_deref()
@@ -521,7 +521,73 @@ impl Installer {
         Ok(())
     }
 
-    async fn resolve_release(&self) -> Result<ClientRelease, String> {
+    async fn resolve_release(&self, minecraft_version: &str) -> Result<ClientRelease, String> {
+        match self.resolve_home_manifest(minecraft_version).await {
+            Ok(release) => Ok(release),
+            Err(home_error) => self
+                .resolve_github_release(minecraft_version)
+                .await
+                .map_err(|github_error| {
+                    format!("Home update manifest failed ({home_error}); GitHub fallback failed ({github_error})")
+                }),
+        }
+    }
+
+    async fn resolve_home_manifest(&self, minecraft_version: &str) -> Result<ClientRelease, String> {
+        let manifest = self
+            .client
+            .get(CLIENT_UPDATE_MANIFEST_URL)
+            .send()
+            .await
+            .map_err(|error| format!("Could not contact SNine update manifest: {error}"))?
+            .error_for_status()
+            .map_err(|error| format!("SNine update manifest returned an error: {error}"))?
+            .json::<HomeClientUpdateManifest>()
+            .await
+            .map_err(|error| format!("Could not read SNine update manifest: {error}"))?;
+        let artifact = manifest
+            .artifacts
+            .get(minecraft_version)
+            .ok_or_else(|| format!("No SNineClient artifact is published for Minecraft {minecraft_version}"))?;
+        let expected_name = if minecraft_version == "1.21.11" {
+            format!("snineclient-{}.jar", manifest.version)
+        } else {
+            format!("snineclient-{minecraft_version}-{}.jar", manifest.version)
+        };
+        if manifest.schema_version != 1
+            || manifest.channel != "stable"
+            || parse_semver_triplet(&manifest.version).is_none()
+            || artifact.version != manifest.version
+            || artifact.minecraft_version != minecraft_version
+            || artifact.asset_name != expected_name
+            || artifact.size == 0
+            || artifact.size > MAX_CLIENT_BYTES
+            || artifact.sha256.len() != 64
+            || !artifact.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err("SNine update manifest contains invalid artifact metadata".into());
+        }
+        let asset_url = Url::parse(&artifact.url)
+            .map_err(|_| "SNine update artifact URL is invalid")?;
+        if asset_url.scheme() != "https"
+            || asset_url.host_str() != Some("snc.silasnet.win")
+            || !asset_url.username().is_empty()
+            || asset_url.password().is_some()
+            || asset_url.path() != format!("/updates/{expected_name}")
+            || asset_url.query().is_some()
+            || asset_url.fragment().is_some()
+        {
+            return Err("SNine update artifact URL is outside the trusted update host".into());
+        }
+        Ok(ClientRelease {
+            version: manifest.version,
+            size: artifact.size,
+            sha256: artifact.sha256.to_ascii_lowercase(),
+            download_url: artifact.url.clone(),
+        })
+    }
+
+    async fn resolve_github_release(&self, minecraft_version: &str) -> Result<ClientRelease, String> {
         let releases = self
             .client
             .get(CLIENT_RELEASES_API)
@@ -547,21 +613,33 @@ impl Installer {
                 continue;
             };
             let expected_tag = format!("{CLIENT_RELEASE_PREFIX}{}", manifest.version);
-            let expected_name = format!("snineclient-{}.jar", manifest.version);
+            let artifact = manifest.artifacts.get(minecraft_version);
+            let (size, sha256, asset_name) = if let Some(artifact) = artifact {
+                (artifact.size, artifact.sha256.as_str(), artifact.asset_name.as_str())
+            } else if minecraft_version == "1.21.11" {
+                (manifest.size, manifest.sha256.as_str(), manifest.asset_name.as_str())
+            } else {
+                continue;
+            };
+            let expected_name = if minecraft_version == "1.21.11" {
+                format!("snineclient-{}.jar", manifest.version)
+            } else {
+                format!("snineclient-{minecraft_version}-{}.jar", manifest.version)
+            };
             if release.tag_name != expected_tag
                 || parse_semver_triplet(&manifest.version).is_none()
-                || manifest.size == 0
-                || manifest.size > MAX_CLIENT_BYTES
-                || manifest.sha256.len() != 64
-                || !manifest.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
-                || manifest.asset_name != expected_name
+                || size == 0
+                || size > MAX_CLIENT_BYTES
+                || sha256.len() != 64
+                || !sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+                || asset_name != expected_name
             {
                 continue;
             }
             let Some(asset) = release
                 .assets
                 .iter()
-                .find(|asset| asset.name == expected_name && asset.size == manifest.size)
+                .find(|asset| asset.name == expected_name && asset.size == size)
             else {
                 continue;
             };
@@ -581,8 +659,8 @@ impl Installer {
             }
             return Ok(ClientRelease {
                 version: manifest.version,
-                size: manifest.size,
-                sha256: manifest.sha256.to_ascii_lowercase(),
+                size,
+                sha256: sha256.to_ascii_lowercase(),
                 download_url: asset.browser_download_url.clone(),
             });
         }

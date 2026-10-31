@@ -598,7 +598,7 @@ export function App() {
         // The profile is visible before this existing async installation pipeline starts.
         void installClient(created);
       } else {
-        created = { id: "demo-" + Date.now(), name: trimmedName, clientVersion: newSnineEnabled ? "1.1.5" : "Vanilla", minecraftVersion: newMinecraftVersion, installed: false, clientReady: false, selected: true, favorite: false, hidden: false, loaderType: newLoaderType, loaderVersion: newLoaderVersion || null, snineclientEnabled: newSnineEnabled, iconId: newProfileIconId, memoryMb };
+        created = { id: "demo-" + Date.now(), name: trimmedName, clientVersion: newSnineEnabled ? "1.1.6" : "Vanilla", minecraftVersion: newMinecraftVersion, installed: false, clientReady: false, selected: true, favorite: false, hidden: false, loaderType: newLoaderType, loaderVersion: newLoaderVersion || null, snineclientEnabled: newSnineEnabled, iconId: newProfileIconId, memoryMb };
         setProfiles(items => insertCreatedProfile(items, created));
         setSelectedId(created.id);
         setProfileViewId(created.id);

@@ -1,6 +1,6 @@
 [package]
 name = "snine-launcher-next"
-version = "1.0.13"
+version = "1.0.15"
 description = "SNine Launcher"
 authors = ["SNine"]
 edition = "2021"
